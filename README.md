@@ -1,5 +1,3 @@
-<p align="right"><b>Claude Code</b> · <b>tmux</b> · Ghostty · kitty</p>
-
 <div align="center">
   <h1>claude-inline-math</h1>
   <p><b>Typeset the LaTeX in Claude's replies and draw mermaid diagrams, right in the terminal. Works inside tmux.</b></p>
@@ -9,7 +7,9 @@
   <img src="https://img.shields.io/badge/KaTeX_corpus-98.8%25-8839ef?style=flat-square" alt="KaTeX corpus 98.8%">
 </div>
 
-<!-- A screenshot goes here: docs/img/demo.png, from /inline-math demo in Ghostty inside tmux. -->
+<p align="center">
+  <img src="./docs/img/demo.png" alt="/inline-math demo in Ghostty inside tmux: inline and display formulas, Chinese text and a mermaid flowchart" width="1000" />
+</p>
 
 > 💡 This is a Claude Code mod: a plugin with a hooks module that changes how replies are drawn in the terminal, nothing else. The stored conversation is never changed, so the model, `ctrl+o`, exports and copies still see the LaTeX and mermaid source.
 
@@ -44,17 +44,17 @@ The CJK packages are only needed for Chinese, Japanese or Korean text inside a f
 
 **Install the mod**
 
+Type this at the Claude Code prompt, answer `y` to add the marketplace, then pick a scope (the user scope loads it in every session):
+
+```text
+/plugin install inline-math --marketplace jczhang02/claude-inline-math
+```
+
+Or from a shell:
+
 ```bash
-git clone https://github.com/jczhang02/claude-inline-math ~/Documents/dev-tools/claude-inline-math
+claude plugin install inline-math --marketplace jczhang02/claude-inline-math
 ```
-
-Then add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` (full path: settings values do not expand `~`; use `:` between several folders):
-
-```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/home/you/Documents/dev-tools/claude-inline-math" } }
-```
-
-Or try it for one session: `claude --plugin-dir ~/Documents/dev-tools/claude-inline-math`.
 
 **Inside tmux**, add these lines to `~/.config/tmux/tmux.conf` or `~/.tmux.conf`, then restart tmux:
 
@@ -74,20 +74,20 @@ set -g focus-events on
 ```
 
 <details>
-<summary><strong>Install as a marketplace plugin</strong></summary>
-
-Make the folder a marketplace by adding `.claude-plugin/marketplace.json` beside `plugin.json`:
-
-```json
-{ "name": "inline-math", "owner": { "name": "JC Zhang" }, "plugins": [{ "name": "inline-math", "source": "./" }] }
-```
-
-Then install it once. The plugin is read from the folder itself, and `/reload-plugins` picks up your edits:
+<summary><strong>Run from a clone (for development)</strong></summary>
 
 ```bash
-claude plugin marketplace add ~/Documents/dev-tools/claude-inline-math
-claude plugin install inline-math@inline-math
+git clone https://github.com/jczhang02/claude-inline-math ~/Documents/dev-tools/claude-inline-math
+claude --plugin-dir ~/Documents/dev-tools/claude-inline-math    # this session only
 ```
+
+For every session, add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` (use `:` between several folders). Claude Code reloads the mod when you save a file. Use either this or the marketplace install, not both.
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/Documents/dev-tools/claude-inline-math" } }
+```
+
+Update an installed copy with `claude plugin update inline-math@claude-inline-math`.
 
 </details>
 

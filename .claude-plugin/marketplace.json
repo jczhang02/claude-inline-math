@@ -1,0 +1,16 @@
+{
+  "name": "claude-inline-math",
+  "owner": {
+    "name": "JC Zhang"
+  },
+  "metadata": {
+    "description": "The inline-math mod for Claude Code: typeset LaTeX and mermaid diagrams in the terminal."
+  },
+  "plugins": [
+    {
+      "name": "inline-math",
+      "source": "./",
+      "description": "Typeset LaTeX and draw mermaid diagrams in Claude Code's terminal replies. Works inside tmux."
+    }
+  ]
+}
