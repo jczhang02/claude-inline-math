@@ -786,8 +786,8 @@ export function stats(): Stats {
     pending: queue.size + inFlight.size,
     batches,
     backendDown,
-    fg: resolvedFg,
-    cell: resolvedCell,
+    fg: currentFg(),
+    cell: currentCell(),
     errors: [...errors],
   }
 }

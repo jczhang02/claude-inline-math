@@ -222,8 +222,9 @@ function fenced(source: string): string {
 
 function segmentColor(role: DiagramRole): { color?: string; dimColor?: boolean } {
   if (role === 'dim') return { dimColor: true }
-  if (role === 'text' || role === 'label') return { color: 'text' }
-  if (!settings.diagramColor) return { color: 'text' }
+  // No colour: the terminal's own text colour, as the reply's body text has
+  // (the theme's 'text' is a fixed grey that a dark terminal hides).
+  if (role === 'text' || role === 'label' || !settings.diagramColor) return {}
   const scheme = theme()
 
   return { color: scheme ? DIAGRAM_COLORS[scheme][role] : DIAGRAM_FALLBACK }

@@ -638,6 +638,11 @@ describe('mermaid', () => {
     expect(await ui.findAll({ type: 'Markdown' })).toHaveLength(2) // the prose around it
     // Light text colour (Latte): borders in Latte blue.
     expect(JSON.stringify(await ui.drawn())).toContain('#1e66f5')
+    // Labels take the terminal's text colour, as the body text does: the
+    // theme's 'text' is black under a light theme, unreadable on a dark terminal.
+    const row = JSON.stringify(await ui.find({ type: 'Text', text: '开始' }))
+    expect(row).toContain('"children":["开始"]')
+    expect(row).not.toContain('"color":"text"')
     await clock.advance(100)
     expect(backend.batches).toHaveLength(0)
     await ui.unmount()
