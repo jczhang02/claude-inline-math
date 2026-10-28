@@ -38,7 +38,7 @@ sys.path.insert(0, HERE)
 import client  # noqa: E402 - after the path
 import render  # noqa: E402
 
-IDLE = 600.0  # seconds without a request before the daemon stops (INLINE_MATH_IDLE)
+IDLE = 1800.0  # seconds without a request before the daemon stops (INLINE_MATH_IDLE)
 POOL = 3  # warm latex processes per format (one takes ~110 ms to load the format)
 POOLS = 2  # formats with warm processes
 ACCEPT_POLL = 0.2
