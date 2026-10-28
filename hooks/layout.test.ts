@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
+  expandMacros,
+  hasDiagram,
   hasMath,
   layoutParagraph,
   mathRefs,
@@ -669,9 +671,145 @@ describe('layoutParagraph', () => {
   })
 })
 
+describe('reply macros', () => {
+  test('\\newcommand with arguments and an optional first argument', () => {
+    expect(expandMacros('\\R^n', ['\\newcommand{\\R}{\\mathbb{R}}'])).toBe('\\mathbb{R}^n')
+    expect(expandMacros('\\norm{x}', ['\\newcommand{\\norm}[1]{\\left\\lVert #1 \\right\\rVert}'])).toBe('\\left\\lVert x \\right\\rVert')
+    expect(expandMacros('\\pair{a}{b} + \\pair a b', ['\\newcommand\\pair[2]{(#1, #2)}'])).toBe('(a, b) + (a, b)')
+    const opt = '\\newcommand{\\seq}[2][n]{#2_1, \\dots, #2_{#1}}'
+    expect(expandMacros('\\seq{x}', [opt])).toBe('x_1, \\dots, x_{n}')
+    expect(expandMacros('\\seq[k]{y}', [opt])).toBe('y_1, \\dots, y_{k}')
+  })
+
+  test('\\def, \\let, \\DeclareMathOperator and \\renewcommand', () => {
+    expect(expandMacros('\\sq{a+b}', ['\\def\\sq#1{(#1)^2}'])).toBe('(a+b)^2')
+    expect(expandMacros('\\eps', ['\\let\\eps=\\varepsilon'])).toBe('\\varepsilon')
+    expect(expandMacros('\\tr A', ['\\DeclareMathOperator{\\tr}{tr}'])).toBe('\\operatorname{tr} A')
+    expect(expandMacros('\\argmax_x f', ['\\DeclareMathOperator*{\\argmax}{arg\\,max}'])).toBe('\\operatorname*{arg\\,max}_x f')
+    expect(expandMacros('\\v', ['\\newcommand{\\v}{1}', '\\renewcommand{\\v}{2}'])).toBe('2')
+    expect(expandMacros('\\v', ['\\newcommand{\\v}{1}', '\\providecommand{\\v}{2}'])).toBe('1')
+  })
+
+  test('a longer name is not a use, nested macros expand, a control word keeps its space', () => {
+    expect(expandMacros('\\Rightarrow \\R', ['\\newcommand{\\R}{\\mathbb{R}}'])).toBe('\\Rightarrow \\mathbb{R}')
+    expect(expandMacros('\\E[X]', ['\\newcommand{\\P}{\\mathbb{P}}', '\\newcommand{\\E}{\\operatorname{\\P}}'])).toBe('\\operatorname{\\mathbb{P}}[X]')
+    expect(expandMacros('\\a b', ['\\newcommand{\\a}{\\alpha}'])).toBe('\\alpha b')
+  })
+
+  test('an argument pasted beside a control word stays apart from it', () => {
+    expect(expandMacros('\\norm{x}', ['\\newcommand{\\norm}[1]{\\lVert#1\\rVert}'])).toBe('\\lVert x\\rVert')
+    expect(expandMacros('\\f{b}', ['\\def\\f#1{\\alpha#1}'])).toBe('\\alpha b')
+    expect(expandMacros('\\g{\\alpha}', ['\\def\\g#1{#1x}'])).toBe('\\alpha x')
+    expect(expandMacros('\\norm{\\alpha}', ['\\newcommand{\\norm}[1]{\\lVert#1\\rVert}'])).toBe('\\lVert\\alpha\\rVert')
+    expect(expandMacros('\\abs{x}', ['\\newcommand{\\abs}[1]{\\left|#1\\right|}'])).toBe('\\left|x\\right|')
+  })
+
+  test('\\providecommand defines only what is not defined yet', () => {
+    expect(expandMacros('\\P(A)', ['\\providecommand{\\P}{\\mathbb{P}}'])).toBe('\\mathbb{P}(A)')
+    expect(expandMacros('\\P', ['\\newcommand{\\P}{1}', '\\providecommand{\\P}{2}'])).toBe('1')
+    const blocks = parseMessage('Let $\\providecommand{\\P}{\\mathbb{P}}$ and $\\P(A)$.')
+    expect(mathRefs(blocks)).toEqual([{ latex: '\\mathbb{P}(A)', display: false }])
+  })
+
+  test('\\global before a definition is dropped, and an empty macro draws nothing', () => {
+    expect(expandMacros('\\R', ['\\global\\def\\R{\\mathbb{R}}'])).toBe('\\mathbb{R}')
+    expect(expandMacros('\\global\\let\\eps\\varepsilon \\eps', [])).toBe('\\varepsilon')
+    expect(expandMacros('\\x', ['\\newcommand{\\x}{}'])).toBe('')
+    expect(expandMacros('\\newcommand{\\x}{}\\x', [])).toBe('')
+  })
+
+  test('a formula of definitions only leaves one space in the sentence', () => {
+    const blocks = parseMessage('Define $\\newcommand{\\R}{\\mathbb{R}}$ then $x \\in \\R$ holds.')
+    const first = blocks[0]
+    expect(first?.kind === 'paragraph' ? first.inlines[0] : undefined).toEqual({ kind: 'text', text: 'Define then ', style: {} })
+  })
+
+  test('recursion, blow-up and a missing argument leave the formula as written', () => {
+    expect(expandMacros('\\loop x', ['\\def\\loop{\\loop}'])).toBe('\\loop x')
+    const bomb = ['\\def\\a{\\b\\b}', '\\def\\b{\\c\\c}', '\\def\\c{\\d\\d}', '\\def\\d{\\e\\e}', '\\def\\e{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}']
+    expect(expandMacros('\\a\\a\\a', bomb)).toBe('\\a\\a\\a')
+    expect(expandMacros('\\f', ['\\newcommand{\\f}[1]{#1^2}'])).toBe('\\f')
+  })
+
+  test('definitions apply to every formula of the reply; a formula of definitions only draws nothing', () => {
+    const text = 'Let $\\newcommand{\\R}{\\mathbb{R}}$ the reals.\n\n$$\n\\DeclareMathOperator{\\tr}{tr}\n\\newcommand{\\norm}[1]{\\|#1\\|}\n$$\n\nThen $x \\in \\R$ and\n\n$$\\norm{A} \\ge \\tr A$$'
+    const blocks = parseMessage(text)
+    expect(mathRefs(blocks)).toEqual([
+      { latex: 'x \\in \\mathbb{R}', display: false },
+      { latex: '\\|A\\| \\ge \\operatorname{tr} A', display: true },
+    ])
+    expect(blocks[0]).toEqual({ kind: 'markdown', text: 'Let the reals.' })
+    expect(blocks.some(block => block.kind === 'display' && block.latex.includes('newcommand'))).toBe(false)
+  })
+
+  test('a definition used before it is defined still expands, and in tables and headings too', () => {
+    const text = '## On $\\R$\n\n| set | |\n|---|---|\n| $\\R^2$ | plane |\n\nWhere $\\def\\R{\\mathbb{R}}$.'
+    expect(parseMessage(text)).toEqual([{ kind: 'markdown', text: '## On ℝ\n\n| set | |\n|---|---|\n| ℝ² | plane |\n\nWhere .' }])
+  })
+
+  test('code is not a definition', () => {
+    const blocks = parseMessage('`$\\newcommand{\\R}{X}$` and $\\R$')
+    expect(mathRefs(blocks)).toEqual([{ latex: '\\R', display: false }])
+  })
+
+  test('a reply that defines nothing reads as before, and a cap of 8000 holds', () => {
+    expect(mathRefs(parseMessage('$\\R$'))).toEqual([{ latex: '\\R', display: false }])
+    const long = `\\newcommand{\\w}{${'y'.repeat(900)}}`
+    expect(expandMacros('\\w'.repeat(8), [long])).toHaveLength(8 * 900)
+    expect(expandMacros('\\w'.repeat(10), [long])).toBe('\\w'.repeat(10))
+  })
+})
+
+describe('mermaid blocks', () => {
+  test('a closed mermaid fence at the top level is a mermaid block, even without math', () => {
+    const text = 'Flow:\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nDone.'
+    expect(hasDiagram(text)).toBe(true)
+    expect(parseMessage(text)).toEqual([
+      { kind: 'markdown', text: 'Flow:' },
+      { kind: 'mermaid', source: 'graph TD\n  A --> B', indent: 0, gapBefore: true },
+      { kind: 'markdown', text: 'Done.', gapBefore: true },
+    ])
+  })
+
+  test('the info string: any case, extra words, ~~~ fences, indented fences', () => {
+    expect(parseMessage('~~~ Mermaid title\nsequenceDiagram\n~~~')).toEqual([{ kind: 'mermaid', source: 'sequenceDiagram', indent: 0 }])
+    expect(parseMessage('  ```mermaid\n  graph LR\n    A-->B\n  ```')).toEqual([{ kind: 'mermaid', source: 'graph LR\n  A-->B', indent: 0 }])
+    expect(hasDiagram('```mermaidx\ngraph\n```')).toBe(false)
+  })
+
+  test('in a list item it hangs under the item text', () => {
+    const blocks = parseMessage('1. Steps:\n\n   ```mermaid\n   graph TD\n   A-->B\n   ```\n2. End')
+    expect(blocks.find(block => block.kind === 'mermaid')).toEqual({ kind: 'mermaid', source: 'graph TD\nA-->B', indent: 3, gapBefore: true })
+  })
+
+  test('unclosed, in a quote, or another language: left to the engine', () => {
+    for (const text of ['```mermaid\ngraph TD\nA-->B', '> ```mermaid\n> graph TD\n> ```', '```js\nmermaid()\n```']) {
+      expect(hasDiagram(text)).toBe(false)
+      expect(parseMessage(text)).toEqual([{ kind: 'markdown', text }])
+    }
+  })
+
+  test('a long run of backticks or tildes is read in linear time', () => {
+    for (const text of ['`'.repeat(60_000), `${'`'.repeat(60_000)} mermaid`, `x ${'~'.repeat(60_000)}mermaid`]) {
+      const started = performance.now()
+      parseMessage(text)
+      hasDiagram(text)
+      expect(performance.now() - started).toBeLessThan(40)
+    }
+  })
+
+  test('code in other fences next to a diagram stays untouched', () => {
+    const blocks = parseMessage('```mermaid\ngraph TD\n```\n\n```tex\n$x$\n```')
+    expect(blocks).toEqual([
+      { kind: 'mermaid', source: 'graph TD', indent: 0 },
+      { kind: 'markdown', text: '```tex\n$x$\n```', gapBefore: true },
+    ])
+  })
+})
+
 describe('fuzz', () => {
   test('random markdown never throws, and hasMath agrees with parseMessage', () => {
-    const alphabet = ['$', '$$', '\\', '\\(', '\\)', '\\[', '\\]', '`', '```', '*', '_', '~~', '[', ']', '(', ')', '<', '>', '\n', '\n\n', ' ', '  ', '- ', '1. ', '# ', '|', '---', '中', '，', 'x', 'ab', '{', '}', '^', '\\frac', '\\begin{pmatrix}', '\\end{pmatrix}', '&', '\t', '    ', '😀', '\\left', '\\not']
+    const alphabet = ['```mermaid\n', '```\n', 'graph TD\n', '\\newcommand{\\R}{\\mathbb{R}}', '\\def\\f#1{#1^2}', '\\R', '\\f', '#1', '$', '$$', '\\', '\\(', '\\)', '\\[', '\\]', '`', '```', '*', '_', '~~', '[', ']', '(', ')', '<', '>', '\n', '\n\n', ' ', '  ', '- ', '1. ', '# ', '|', '---', '中', '，', 'x', 'ab', '{', '}', '^', '\\frac', '\\begin{pmatrix}', '\\end{pmatrix}', '&', '\t', '    ', '😀', '\\left', '\\not']
     let seed = 7
     const random = (n: number) => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff
@@ -684,7 +822,7 @@ describe('fuzz', () => {
         text += alphabet[random(alphabet.length)]
       }
       const blocks = parseMessage(text)
-      if (!hasMath(text)) {
+      if (!hasMath(text) && !hasDiagram(text)) {
         expect(blocks).toEqual([{ kind: 'markdown', text }])
       }
       for (const block of blocks) {

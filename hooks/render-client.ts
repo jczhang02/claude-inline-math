@@ -2,12 +2,21 @@ import type { EngineInterface, PluginOptions } from 'claude-code'
 
 import type { MathRef, Picture, PictureState } from './layout'
 
-// The one place that runs bin/render.py. A draw asks `lookup` for each
-// formula and gets what is ready now; what is missing is queued. A worker the
-// session starts (`runWorker`) sends the queue in batched calls a moment
-// later and asks for one redraw when a batch lands. A formula that is ready
-// or failed is never asked for again, so a redraw that finds everything ready
-// starts no work and no further redraw.
+// The one place that runs the backend (bin/client.py, which hands each
+// request to the long-lived render daemon, or renders in-process when the
+// daemon cannot be reached). A draw asks `lookup` for each formula and gets
+// what is ready now; what is missing is queued, with the drawn site (the
+// message's requestId) noted as waiting for it. A worker the session starts
+// (`runWorker`) sends the queue in batched calls a moment later; when a batch
+// lands, only the sites that waited for one of its formulas are drawn again
+// (each reads its member of the `redraw` state family while drawing, and a
+// write to it redraws that site alone). A formula that is ready or failed is
+// never asked for again, so a redraw that finds everything ready starts no
+// work and no further redraw. `prefetch` queues a formula no site waits for
+// yet (the streaming prerender), so it is cached by the time it is drawn:
+// such formulas gather for up to PREFETCH_MS, so a streaming reply costs a
+// few backend calls and not one per formula, and `flush` sends them at once
+// when their block has ended (its draw comes next).
 //
 // The engine allows `$` only as `$.noun.event(...)` at a call site and as an
 // argument to a function like these, never kept in a variable, so the worker
@@ -21,6 +30,9 @@ export type Settings = {
   ptPx: number
   minShrink: number
   promptHint: boolean
+  packages: string[] // extra TeX Live packages, in the precompiled format
+  macros: string // the user's own definitions, in the precompiled format
+  diagramColor: boolean
 }
 
 export type Health = {
@@ -32,6 +44,10 @@ export type Health = {
   fg?: string
   cacheDir?: string
   problems: string[]
+  // What client.py --check says of the render daemon and the precompiled
+  // format; shapes the backend owns, shown as given.
+  daemon?: unknown
+  format?: unknown
 }
 
 export type Stats = {
@@ -47,9 +63,10 @@ export type Stats = {
 
 type Failure = { error: string; isBackend?: boolean }
 type Result = Picture | Failure
-type Job = { key: string; ref: MathRef; maxColumns: number }
+// eager: a draw waits for it (sent after COALESCE_MS), else a prefetch.
+type Job = { key: string; ref: MathRef; maxColumns: number; eager: boolean }
 type Answer = { cell?: { width: number; height: number }; fg?: string; results?: unknown[] }
-// What one render.py call came to: its answer, a failure (`transient`: worth
+// What one backend call came to: its answer, a failure (`transient`: worth
 // asking again; `down`: python itself cannot run), or 'split' when the answer
 // was too big to come back whole.
 type Outcome = { answer: Answer } | { failure: string; transient: boolean; down: boolean } | 'split'
@@ -62,12 +79,21 @@ export const DEFAULTS: Settings = {
   ptPx: 3.4,
   minShrink: 0.8,
   promptHint: true,
+  packages: [],
+  macros: '',
+  diagramColor: true,
 }
 
+const REDRAW = { plugin: 'inline-math', key: 'redraw' } as const
+
 const MAX_COLUMNS = 255 // widest Image the terminal draws
-const COALESCE_MS = 30 // requests closer than this share one render.py call
+const COALESCE_MS = 30 // requests closer than this share one backend call
+const PREFETCH_MS = 400 // prefetches gather this long (a draw's request or flush() ends the wait)
+const WARM_AFTER_MS = 60_000 // a turn that starts this long after the last backend call warms the daemon
 const BATCH_ITEMS = 16 // keeps one call well inside its time limit
 const RUN_TIMEOUT_MS = 90_000
+const MAX_PACKAGES = 64
+const MAX_MACROS = 64 * 1024 // characters of the user's definitions, as the backend takes
 const CHECK_TIMEOUT_MS = 15_000
 const DETECT_TIMEOUT_MS = 5_000
 const DETECT_MS = 5_000 // how often an 'auto' colour and cell size are looked up again
@@ -89,12 +115,17 @@ const RETRIES = 2 // for a formula that failed for a passing reason, not one TeX
 const ERROR_LOG = 20
 
 let settings: Settings = DEFAULTS
+let setupKey = '' // stands for the packages and macros: they change every picture
 let resolvedFg: string | undefined
 let resolvedCell: string | undefined
 let backendDown: string | undefined
 let problemHandler: (reason: string) => void = () => {}
 let batches = 0
 let wake: (() => void) | undefined
+// Ends the worker's gathering wait sooner: after `ms`, or at once for 0.
+let hurry: ((ms: number) => void) | undefined
+let isUrgent = false // flush() came while the worker was not gathering: its next gathering ends at once
+let lastCallAt = Number.NEGATIVE_INFINITY // performance.now() of the last backend call
 let worker = 0 // the running worker's number; an older one stops
 let cacheBytes = 0
 
@@ -104,6 +135,10 @@ const inFlight = new Set<string>()
 const retries = new Map<string, number>()
 const renders = new Map<string, number>()
 const errors: { latex: string; error: string }[] = []
+// Which drawn sites wait for a queued formula, and how often each was asked to redraw.
+const waiters = new Map<string, Set<string>>()
+const redraws = new Map<string, number>()
+let diagramsShown = false
 
 function number(value: unknown, fallback: number, low: number, high: number): number {
   const n = typeof value === 'number' ? value : Number(value)
@@ -111,10 +146,38 @@ function number(value: unknown, fallback: number, low: number, high: number): nu
   return Number.isFinite(n) && n >= low && n <= high ? n : fallback
 }
 
+/**
+ * The `packages` option: names split at commas, semicolons and white space,
+ * or a list of names. The backend checks each name (and says which it
+ * skipped in --check), so any word is passed on.
+ */
+function readPackages(value: unknown): string[] {
+  const words = Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : typeof value === 'string' ? value.split(/[\s,;]+/) : []
+  const out: string[] = []
+  for (const word of words) {
+    const name = word.trim().slice(0, 64)
+    if (name !== '' && !out.includes(name) && out.length < MAX_PACKAGES) out.push(name)
+  }
+
+  return out
+}
+
+/** A short stable hash (FNV-1a), for keys. */
+function hash(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+
+  return h.toString(36)
+}
+
 /** The manifest's userConfig values, checked, with defaults for anything off. */
 export function readSettings(options: PluginOptions): Settings {
   const fg = String(options.foreground ?? 'auto').trim()
   const cell = String(options.cell ?? 'auto').trim()
+  const macros = typeof options.macros === 'string' ? options.macros.replace(/\r\n?/g, '\n').trim() : ''
 
   return {
     enabled: options.enabled !== false,
@@ -124,12 +187,16 @@ export function readSettings(options: PluginOptions): Settings {
     ptPx: number(options.ptPx, DEFAULTS.ptPx, 1, 12),
     minShrink: number(options.minShrink, DEFAULTS.minShrink, 0.3, 1),
     promptHint: options.promptHint !== false,
+    packages: readPackages(options.packages),
+    macros: macros.length <= MAX_MACROS ? macros : '',
+    diagramColor: options.diagramColor !== false,
   }
 }
 
 /** Takes the settings the module loaded with. */
 export function configure(next: Settings, options: PluginOptions = {}) {
   settings = next
+  setupKey = next.packages.length > 0 || next.macros !== '' ? hash(JSON.stringify([next.packages, next.macros])) : ''
   const entries = Number(options.cacheEntries)
   cacheLimits.entries = Number.isInteger(entries) && entries >= 2 ? entries : CACHE_LIMIT
 }
@@ -158,7 +225,7 @@ function isPicture(value: unknown): value is Picture {
   )
 }
 
-/** An item error render.py gives for a passing reason, not for the formula. */
+/** An item error the backend gives for a passing reason, not for the formula. */
 function isTransient(error: string): boolean {
   return /time ?out|timed out|deadline|^renderer|memory or output limit/i.test(error)
 }
@@ -179,7 +246,25 @@ function currentCell(): string {
 }
 
 function optionsKey(): string {
-  return [currentFg(), currentCell(), settings.baseline, settings.ptPx, settings.minShrink].join(',')
+  return [currentFg(), currentCell(), settings.baseline, settings.ptPx, settings.minShrink, setupKey].join(',')
+}
+
+/**
+ * Light or dark, as the colour formulas are drawn in says (light text: a
+ * dark background); undefined while an 'auto' colour is not known yet.
+ */
+export function theme(): 'light' | 'dark' | undefined {
+  const fg = currentFg()
+  if (!/^#[0-9a-f]{6}$/i.test(fg)) return undefined
+  const [r, g, b] = [1, 3, 5].map(at => parseInt(fg.slice(at, at + 2), 16) / 255) as [number, number, number]
+
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 'dark' : 'light'
+}
+
+/** A diagram was drawn: a light/dark switch must redraw it, formulas or not. */
+export function noteDiagram() {
+  diagramsShown = true
+  isDrawn = true
 }
 
 function keyOf(ref: MathRef, maxColumns: number): string {
@@ -226,12 +311,22 @@ function reportDown(reason: string) {
 }
 
 /** Queues `ref`, or false when it was drawn and evicted too often to ask again. */
-function enqueue(ref: MathRef, maxColumns: number): boolean {
+function enqueue(ref: MathRef, maxColumns: number, eager = true): boolean {
   const key = keyOf(ref, maxColumns)
-  if (inFlight.has(key) || queue.has(key)) return true
+  if (inFlight.has(key)) return true
+  const queued = queue.get(key)
+  if (queued) {
+    if (eager && !queued.eager) {
+      queued.eager = true
+      hurry?.(COALESCE_MS)
+    }
+
+    return true
+  }
   if ((renders.get(key) ?? 0) >= RENDER_LIMIT) return false
-  queue.set(key, { key, ref, maxColumns })
+  queue.set(key, { key, ref, maxColumns, eager })
   wake?.()
+  if (eager) hurry?.(COALESCE_MS)
 
   return true
 }
@@ -240,28 +335,99 @@ function enqueue(ref: MathRef, maxColumns: number): boolean {
 let isDrawn = false
 
 const EVICTED: Failure = { error: 'more formulas on screen than the picture cache holds', isBackend: true }
+// The same object for as long as the backend stays down, so a draw that
+// compares what it drew with what is ready now sees no change.
+let downFailure: Failure = { error: '', isBackend: true }
+
+function waitFor(key: string, site: string | undefined) {
+  if (site === undefined) return
+  if (waiters.size > 4 * CACHE_LIMIT) waiters.clear()
+  const sites = waiters.get(key)
+  if (sites) sites.add(site)
+  else waiters.set(key, new Set([site]))
+}
+
+/** Queues `key` (noting `site` as waiting for it): 'pending', or EVICTED when it may not be asked for again. */
+function ask(ref: MathRef, maxColumns: number, site: string | undefined): PictureState {
+  if (!enqueue(ref, maxColumns)) return EVICTED
+  waitFor(keyOf(ref, maxColumns), site)
+
+  return 'pending'
+}
 
 /**
  * What is ready for `ref` at `width` columns: a picture, an error, or
- * 'pending' (then queued for the worker). A picture wider than `width` is
- * asked for again at that width, so a long formula shrinks to fit.
+ * 'pending' (then queued for the worker, with `site` noted as waiting for
+ * it). A picture wider than `width` is asked for again at that width, so a
+ * long formula shrinks to fit. The same state comes back as the same object
+ * until it changes.
  */
-export function lookup(ref: MathRef, width: number): PictureState {
+export function lookup(ref: MathRef, width: number, site?: string): PictureState {
   isDrawn = true
-  if (backendDown !== undefined) return { error: backendDown, isBackend: true }
+  if (backendDown !== undefined) {
+    if (downFailure.error !== backendDown) downFailure = { error: backendDown, isBackend: true }
+
+    return downFailure
+  }
   const base = hit(keyOf(ref, MAX_COLUMNS))
-  if (base === undefined) return enqueue(ref, MAX_COLUMNS) ? 'pending' : EVICTED
+  if (base === undefined) return ask(ref, MAX_COLUMNS, site)
   if ('error' in base || base.columns <= width) return base
   const fit = Math.max(1, Math.min(MAX_COLUMNS, Math.floor(width)))
   const narrow = hit(keyOf(ref, fit))
-  if (narrow === undefined) return enqueue(ref, fit) ? 'pending' : EVICTED
+  if (narrow === undefined) return ask(ref, fit, site)
 
   return narrow
 }
 
+/**
+ * Queues `ref` for `width` columns ahead of any draw (a formula seen closed
+ * while the reply streams), so its picture is ready when the reply is drawn.
+ * Nothing waits for it, so its landing redraws nothing.
+ */
+export function prefetch(ref: MathRef, width: number) {
+  if (backendDown !== undefined) return
+  const base = cache.get(keyOf(ref, MAX_COLUMNS))
+  if (base === undefined) {
+    enqueue(ref, MAX_COLUMNS, false)
+
+    return
+  }
+  if ('error' in base || base.columns <= width) return
+  const fit = Math.max(1, Math.min(MAX_COLUMNS, Math.floor(width)))
+  if (!cache.has(keyOf(ref, fit))) enqueue(ref, fit, false)
+}
+
+/**
+ * Sends the prefetched formulas now: the block they came from has ended,
+ * and its draw comes next.
+ */
+export function flush() {
+  if (queue.size === 0) return
+  if (hurry) hurry(0)
+  else isUrgent = true
+}
+
+/**
+ * A turn is starting: when the backend was last called a while ago (its
+ * daemon may have stopped after its idle time), starts it and has it load
+ * what the next formula needs, so the first batch of the reply is a warm one.
+ */
+export function warmUp($: EngineInterface) {
+  if (backendDown !== undefined) return
+  const now = performance.now()
+  if (now - lastCallAt < WARM_AFTER_MS) return
+  lastCallAt = now
+  void $.process
+    .run(backend($, '--warm'), { stdin: JSON.stringify({ options: setupOptions() }), timeoutMs: CHECK_TIMEOUT_MS })
+    .catch(() => {})
+}
+
 function takeBatch(): Job[] {
+  isUrgent = false // what was queued when flush() came goes now
   const batch: Job[] = []
-  for (const job of queue.values()) {
+  // What a draw waits for first, then prefetches.
+  const jobs = [...queue.values()].sort((a, b) => Number(b.eager) - Number(a.eager))
+  for (const job of jobs) {
     if (batch.length === 0 || (job.maxColumns === batch[0]?.maxColumns && batch.length < BATCH_ITEMS)) {
       batch.push(job)
     }
@@ -290,36 +456,48 @@ function settle(job: Job, result: Result, storeKey: string, transient: boolean) 
   remember(storeKey, result)
 }
 
-/** Does a failed run mean python or render.py cannot run at all? */
+/** Does a failed run mean python or the backend cannot run at all? */
 function isStartFailure(text: string): boolean {
   return /ENOENT|EACCES|not found|No such file|cannot (?:start|run|spawn|execute)|spawn/i.test(text)
 }
 
-/** One render.py call for `batch`. */
+/** The backend's command line, with `flags`. */
+function backend($: EngineInterface, ...flags: string[]): string[] {
+  return ['python3', '-I', '-S', `${$.plugin.root}/bin/client.py`, ...flags]
+}
+
+/** What every request carries besides its items: the user's packages and macros. */
+function setupOptions(): { packages: string[]; macros: string } {
+  return { packages: settings.packages, macros: settings.macros }
+}
+
+/** One backend call for `batch`. */
 async function callRender($: EngineInterface, batch: Job[]): Promise<Outcome> {
   const request = {
     items: batch.map(job => ({ latex: job.ref.latex, display: job.ref.display })),
     options: {
       // The resolved values when known, so each call draws for the key it is
-      // filed under and render.py skips its own lookup.
+      // filed under and the backend skips its own lookup.
       fg: currentFg(),
       cell: currentCell(),
       baseline: settings.baseline,
       ptPx: settings.ptPx,
       minShrink: settings.minShrink,
-      cacheDir: null, // render.py's own: ~/.cache/claude-inline-math
+      cacheDir: null, // the backend's own: ~/.cache/claude-inline-math
       maxColumns: batch[0]?.maxColumns ?? MAX_COLUMNS,
+      ...setupOptions(),
     },
   }
   let run: Awaited<ReturnType<EngineInterface['process']['run']>>
+  lastCallAt = performance.now()
   try {
-    run = await $.process.run(['python3', '-I', `${$.plugin.root}/bin/render.py`], {
+    run = await $.process.run(backend($), {
       stdin: JSON.stringify(request),
       timeoutMs: RUN_TIMEOUT_MS,
     })
   } catch (err) {
     const text = String(err).slice(0, 200)
-    if (/time ?out|timed out/i.test(text)) return { failure: `render.py timed out (${text})`, transient: true, down: false }
+    if (/time ?out|timed out/i.test(text)) return { failure: `the renderer timed out (${text})`, transient: true, down: false }
 
     return { failure: `could not run python3: ${text}`, transient: !isStartFailure(text), down: isStartFailure(text) }
   }
@@ -330,14 +508,14 @@ async function callRender($: EngineInterface, batch: Job[]): Promise<Outcome> {
   } catch {
     // reported below
   }
-  const reason = lastLine(run.stderr) || `render.py exited ${run.exitCode} with no answer`
+  const reason = lastLine(run.stderr) || `client.py exited ${run.exitCode} with no answer`
   // A missing interpreter or module breaks every formula: stop asking.
-  const down = /ModuleNotFoundError|No module named|can't open file|No such file or directory: .*render\.py/i.test(reason)
+  const down = /ModuleNotFoundError|No module named|can't open file|No such file or directory: .*(?:render|client|renderd)\.py/i.test(reason)
 
   return { failure: reason, transient: !down, down }
 }
 
-/** Runs render.py for `batch` and keeps what it answered; halves a batch whose answer was too big. */
+/** Runs the backend for `batch` and keeps what it answered; halves a batch whose answer was too big. */
 async function runBatch($: EngineInterface, batch: Job[]): Promise<void> {
   const outcome = await callRender($, batch)
   batches += 1
@@ -384,6 +562,34 @@ function waitForWork(): Promise<void> {
 }
 
 /**
+ * Lets queued requests gather before a call: COALESCE_MS when a draw waits
+ * for one, PREFETCH_MS when all are prefetches (until a draw's request comes,
+ * or flush()).
+ */
+function gather($: EngineInterface): Promise<void> {
+  return new Promise<void>(resolve => {
+    let isDone = false
+    const done = () => {
+      if (isDone) return
+      isDone = true
+      hurry = undefined
+      resolve()
+    }
+    hurry = ms => {
+      if (ms <= 0) done()
+      else $.clock.after(ms, done)
+    }
+    if (isUrgent) {
+      done()
+
+      return
+    }
+    const eager = [...queue.values()].some(job => job.eager)
+    $.clock.after(eager ? COALESCE_MS : PREFETCH_MS, done)
+  })
+}
+
+/**
  * The session's render loop: waits for queued formulas, lets requests that
  * arrive close together gather, sends them, and asks for one redraw per round.
  * Started from `session.start`, whose `$` outlives the hook; a newer worker
@@ -396,11 +602,10 @@ export async function runWorker($: EngineInterface) {
   for (;;) {
     await waitForWork()
     if (me !== worker) return
-    await new Promise<void>(resolve => {
-      $.clock.after(COALESCE_MS, resolve)
-    })
+    await gather($)
     while (queue.size > 0 && me === worker) {
       const batch = takeBatch()
+      const isLeftOver = queue.size > 0 // already gathered: goes after this call without a wait
       try {
         await runBatch($, batch)
       } catch {
@@ -408,14 +613,48 @@ export async function runWorker($: EngineInterface) {
       } finally {
         for (const job of batch) inFlight.delete(job.key)
       }
+      if (me === worker) await redrawWaiting($, batch)
+      // What came during the call gathers as the first requests did (a
+      // stream's prefetches would otherwise go one or two to a call).
+      if (!isLeftOver && queue.size > 0 && queue.size < BATCH_ITEMS && me === worker) await gather($)
     }
-    if (me === worker) $.ui.invalidate('ui.render')
   }
 }
 
+/**
+ * Draws again the sites that waited for a formula of `batch`, and no other:
+ * one write each to their member of the `redraw` family, which they read
+ * while drawing. Where that write is refused, one redraw of everything.
+ */
+async function redrawWaiting($: EngineInterface, batch: Job[]) {
+  const sites = new Set<string>()
+  for (const job of batch) {
+    for (const site of waiters.get(job.key) ?? []) sites.add(site)
+    waiters.delete(job.key)
+  }
+  if (sites.size === 0) return
+  if (redraws.size > 4 * CACHE_LIMIT) redraws.clear()
+  const written = await Promise.all(
+    [...sites].map(async site => {
+      const count = (redraws.get(site) ?? 0) + 1
+      redraws.set(site, count)
+      try {
+        await $.state.set({ ...REDRAW, id: site }, count)
+
+        return true
+      } catch {
+        return false
+      }
+    }),
+  )
+  if (written.includes(false)) $.ui.invalidate('ui.render')
+}
+
 async function runCheck($: EngineInterface): Promise<Health> {
+  lastCallAt = performance.now()
   try {
-    const run = await $.process.run(['python3', '-I', `${$.plugin.root}/bin/render.py`, '--check'], {
+    const run = await $.process.run(backend($, '--check'), {
+      stdin: JSON.stringify({ options: setupOptions() }),
       timeoutMs: CHECK_TIMEOUT_MS,
     })
     const health = JSON.parse(run.stdout) as Health
@@ -427,7 +666,7 @@ async function runCheck($: EngineInterface): Promise<Health> {
       latex: false,
       dvipng: false,
       pil: false,
-      problems: [`render.py --check failed: ${String(err).slice(0, 300)}`],
+      problems: [`client.py --check failed: ${String(err).slice(0, 300)}`],
     }
   }
 }
@@ -450,32 +689,32 @@ function adopt(found: { fg?: unknown; cell?: unknown }): boolean {
 }
 
 /**
- * Runs `render.py --check` and adopts what it found: a broken backend (told
+ * Runs `client.py --check` and adopts what it found: a broken backend (told
  * once, then every formula shows as text), a repaired one, or a new colour or
  * cell size (the desktop switched light and dark, the font size changed).
  */
 export async function check($: EngineInterface): Promise<Health> {
   const health = await runCheck($)
   if (!health.ok) {
-    reportDown(health.problems.join('; ') || 'render.py is not ready')
+    reportDown(health.problems.join('; ') || 'the renderer is not ready')
 
     return health
   }
   const wasDown = backendDown !== undefined
   backendDown = undefined
   const changed = adopt(health)
-  if ((changed && cache.size > 0) || wasDown) $.ui.invalidate('ui.render')
+  if ((changed && (cache.size > 0 || diagramsShown)) || wasDown) $.ui.invalidate('ui.render')
 
   return health
 }
 
-/** `render.py --detect`: the 'auto' colour and cell size alone, without a test render. */
+/** `client.py --detect`: the 'auto' colour and cell size alone, without a test render. */
 async function detect($: EngineInterface) {
   try {
-    const run = await $.process.run(['python3', '-I', `${$.plugin.root}/bin/render.py`, '--detect'], {
+    const run = await $.process.run(backend($, '--detect'), {
       timeoutMs: DETECT_TIMEOUT_MS,
     })
-    if (adopt(JSON.parse(run.stdout) as { fg?: unknown; cell?: unknown }) && cache.size > 0) $.ui.invalidate('ui.render')
+    if (adopt(JSON.parse(run.stdout) as { fg?: unknown; cell?: unknown }) && (cache.size > 0 || diagramsShown)) $.ui.invalidate('ui.render')
   } catch {
     // the next round tries again
   }
@@ -511,7 +750,7 @@ export function startPolling($: EngineInterface) {
       return
     }
     const auto = settings.foreground === 'auto' || settings.cell === 'auto'
-    if (!auto || cache.size === 0) return
+    if (!auto || (cache.size === 0 && !diagramsShown)) return
     idleMs = isDrawn ? 0 : idleMs + DETECT_MS
     isDrawn = false
     if (idleMs >= IDLE_AFTER_MS && idleMs % IDLE_DETECT_MS !== 0) return
@@ -529,6 +768,7 @@ export function clear() {
   retries.clear()
   renders.clear()
   errors.length = 0
+  waiters.clear()
   backendDown = undefined
 }
 

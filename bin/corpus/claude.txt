@@ -1,0 +1,255 @@
+# Formulas as Claude writes them in replies: analysis, linear algebra,
+# probability and statistics, machine learning, physics, chemistry,
+# computer science, Chinese and other \text, aligned derivations. Written
+# for this corpus.
+# One formula per line; "$$ " starts a display formula.
+#
+# analysis
+\lim_{x \to 0} \frac{\sin x}{x} = 1
+\lim_{n\to\infty}\left(1+\frac{1}{n}\right)^n = e
+$$ \int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}
+$$ \int_{-\infty}^{\infty} e^{-ax^2}\,\mathrm{d}x = \sqrt{\frac{\pi}{a}}, \quad a > 0
+f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}
+$$ \sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}
+e^{i\pi} + 1 = 0
+$$ f(x) = \sum_{n=0}^{\infty} \frac{f^{(n)}(a)}{n!}(x-a)^n
+\frac{d}{dx}\left[x^n\right] = n x^{n-1}
+$$ \frac{\partial^2 u}{\partial t^2} = c^2 \nabla^2 u
+\int u\,dv = uv - \int v\,du
+$$ \oint_C \mathbf{F} \cdot d\mathbf{r} = \iint_S (\nabla \times \mathbf{F}) \cdot d\mathbf{S}
+\forall \varepsilon > 0,\ \exists \delta > 0 : |x - a| < \delta \implies |f(x) - f(a)| < \varepsilon
+$$ \Gamma(z) = \int_0^\infty t^{z-1} e^{-t}\,dt
+\zeta(s) = \sum_{n=1}^\infty n^{-s} = \prod_{p\ \text{prime}} \frac{1}{1-p^{-s}}
+$$ \hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx
+\|f\|_{L^p} = \left( \int_\Omega |f|^p \, d\mu \right)^{1/p}
+$$ \lim_{N\to\infty} \frac{1}{N} \sum_{k=1}^{N} f(x_k) = \int_0^1 f(x)\,dx
+\sin^2\theta + \cos^2\theta = 1
+\binom{n}{k} = \frac{n!}{k!\,(n-k)!}
+$$ (a+b)^n = \sum_{k=0}^{n} \binom{n}{k} a^{n-k} b^{k}
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+\log_a b = \frac{\ln b}{\ln a}
+\left| \int_a^b f(x)\,dx \right| \le \int_a^b |f(x)|\,dx
+$$ \frac{dy}{dx} + P(x)\,y = Q(x) \;\Rightarrow\; y = e^{-\int P\,dx}\left(\int Q e^{\int P\,dx}\,dx + C\right)
+\mathcal{L}\{f(t)\}(s) = \int_0^\infty f(t) e^{-st}\,dt
+\sup_{x \in [0,1]} |f_n(x) - f(x)| \to 0
+f \in C^\infty(\mathbb{R}^n)
+\nabla f(\mathbf{x}) = \left( \frac{\partial f}{\partial x_1}, \dots, \frac{\partial f}{\partial x_n} \right)^{\!\top}
+# linear algebra
+A\mathbf{x} = \mathbf{b}
+$$ A = \begin{pmatrix} a_{11} & a_{12} \\ a_{21} & a_{22} \end{pmatrix}
+\det(A - \lambda I) = 0
+$$ \begin{bmatrix} 1 & 2 \\ 3 & 4 \end{bmatrix}^{-1} = \frac{1}{-2}\begin{bmatrix} 4 & -2 \\ -3 & 1 \end{bmatrix}
+A = U \Sigma V^\top
+A = Q\Lambda Q^{-1}
+\langle \mathbf{u}, \mathbf{v} \rangle = \mathbf{u}^\top \mathbf{v} = \sum_i u_i v_i
+\|\mathbf{x}\|_2 = \sqrt{\sum_{i=1}^n x_i^2}
+\operatorname{rank}(A) + \dim\ker(A) = n
+$$ \begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc
+\operatorname{tr}(AB) = \operatorname{tr}(BA)
+(AB)^{\mathsf T} = B^{\mathsf T} A^{\mathsf T}
+$$ \mathbf{x}^* = \arg\min_{\mathbf{x}} \|A\mathbf{x} - \mathbf{b}\|_2^2 = (A^\top A)^{-1} A^\top \mathbf{b}
+\lambda_{\max}(A) = \max_{\|\mathbf{x}\| = 1} \mathbf{x}^\top A \mathbf{x}
+$$ \begin{pmatrix} 1 & 0 & \cdots & 0 \\ 0 & 1 & \cdots & 0 \\ \vdots & \vdots & \ddots & \vdots \\ 0 & 0 & \cdots & 1 \end{pmatrix}
+\mathbf{v} \in \operatorname{span}\{\mathbf{e}_1, \mathbf{e}_2\}
+A \succeq 0 \iff \mathbf{x}^\top A \mathbf{x} \ge 0 \ \forall \mathbf{x}
+\kappa(A) = \|A\|\,\|A^{-1}\|
+$$ \left[\begin{array}{ccc|c} 1 & 2 & 3 & 4 \\ 0 & 1 & 2 & 3 \end{array}\right]
+\mathbb{R}^{m \times n}
+# probability and statistics
+P(A \mid B) = \frac{P(B \mid A)\,P(A)}{P(B)}
+\mathbb{E}[X] = \sum_x x\,p(x)
+$$ \mathbb{E}[X] = \int_{-\infty}^{\infty} x f_X(x)\,dx
+\operatorname{Var}(X) = \mathbb{E}[X^2] - (\mathbb{E}[X])^2
+X \sim \mathcal{N}(\mu, \sigma^2)
+$$ f(x) = \frac{1}{\sigma\sqrt{2\pi}} \exp\!\left( -\frac{(x-\mu)^2}{2\sigma^2} \right)
+P(X = k) = \binom{n}{k} p^k (1-p)^{n-k}
+P(X = k) = \frac{\lambda^k e^{-\lambda}}{k!}
+\bar{x} = \frac{1}{n}\sum_{i=1}^n x_i
+s^2 = \frac{1}{n-1}\sum_{i=1}^n (x_i - \bar{x})^2
+\operatorname{Cov}(X,Y) = \mathbb{E}[(X-\mu_X)(Y-\mu_Y)]
+\rho_{XY} = \frac{\operatorname{Cov}(X,Y)}{\sigma_X \sigma_Y}
+$$ \frac{\bar{X} - \mu}{\sigma/\sqrt{n}} \xrightarrow{d} \mathcal{N}(0,1)
+\Pr\left( |X - \mu| \ge k\sigma \right) \le \frac{1}{k^2}
+H(X) = -\sum_{x} p(x) \log_2 p(x)
+D_{\mathrm{KL}}(P \,\|\, Q) = \sum_x P(x) \log \frac{P(x)}{Q(x)}
+\hat{\theta}_{\text{MLE}} = \arg\max_\theta \prod_{i=1}^n p(x_i \mid \theta)
+$$ p(\theta \mid \mathcal{D}) \propto p(\mathcal{D} \mid \theta)\, p(\theta)
+\mathbf{1}_{\{X > t\}}
+\mathbb{1}[y_i = \hat{y}_i]
+X_1, \dots, X_n \overset{\text{i.i.d.}}{\sim} \operatorname{Bernoulli}(p)
+\chi^2 = \sum_{i} \frac{(O_i - E_i)^2}{E_i}
+# machine learning
+\mathcal{L}(\theta) = -\frac{1}{N}\sum_{i=1}^N \left[ y_i \log \hat{y}_i + (1-y_i)\log(1-\hat{y}_i) \right]
+\theta_{t+1} = \theta_t - \eta \nabla_\theta \mathcal{L}(\theta_t)
+\sigma(z) = \frac{1}{1 + e^{-z}}
+\operatorname{softmax}(\mathbf{z})_i = \frac{e^{z_i}}{\sum_{j=1}^K e^{z_j}}
+$$ \operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\left( \frac{QK^\top}{\sqrt{d_k}} \right) V
+\operatorname{ReLU}(x) = \max(0, x)
+$$ \hat{\boldsymbol\beta} = (X^\top X + \lambda I)^{-1} X^\top \mathbf{y}
+m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t
+\hat{v}_t = \frac{v_t}{1 - \beta_2^t}
+\mathbf{h}_t = \tanh(W_h \mathbf{h}_{t-1} + W_x \mathbf{x}_t + \mathbf{b})
+\|\mathbf{w}\|_1 = \sum_j |w_j|
+\text{precision} = \frac{TP}{TP + FP}, \quad \text{recall} = \frac{TP}{TP + FN}
+F_1 = 2 \cdot \frac{\text{precision} \cdot \text{recall}}{\text{precision} + \text{recall}}
+\mathcal{L}_{\text{ELBO}} = \mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)] - D_{\mathrm{KL}}(q_\phi(z|x) \| p(z))
+$$ \min_G \max_D \; \mathbb{E}_{x \sim p_{\text{data}}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]
+\operatorname{PE}_{(pos, 2i)} = \sin\!\left( pos / 10000^{2i/d} \right)
+# physics
+F = ma
+E = mc^2
+\vec{F} = q(\vec{E} + \vec{v} \times \vec{B})
+$$ \nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}
+$$ \nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+$$ i\hbar \frac{\partial}{\partial t} \Psi(\mathbf{r},t) = \hat{H} \Psi(\mathbf{r},t)
+$$ \hat{H} = -\frac{\hbar^2}{2m}\nabla^2 + V(\mathbf{r})
+\Delta x\, \Delta p \ge \frac{\hbar}{2}
+|\psi\rangle = \alpha|0\rangle + \beta|1\rangle
+\langle \psi | \hat{A} | \psi \rangle
+\ket{\psi} = \frac{1}{\sqrt{2}}\left( \ket{00} + \ket{11} \right)
+E_n = -\frac{13.6\ \text{eV}}{n^2}
+$$ L = T - V, \qquad \frac{d}{dt}\frac{\partial L}{\partial \dot{q}} - \frac{\partial L}{\partial q} = 0
+\gamma = \frac{1}{\sqrt{1 - v^2/c^2}}
+PV = nRT
+\Delta S \ge 0
+dU = T\,dS - P\,dV
+\omega = 2\pi f, \quad T = \frac{2\pi}{\omega}
+\tau = \mathbf{r} \times \mathbf{F}
+$$ R_{\mu\nu} - \frac{1}{2} R\, g_{\mu\nu} + \Lambda g_{\mu\nu} = \frac{8\pi G}{c^4} T_{\mu\nu}
+\lambda = \frac{h}{p}
+g = 9.8\ \mathrm{m/s^2}
+c \approx 3 \times 10^8\,\mathrm{m\,s^{-1}}
+T = 25\,^\circ\mathrm{C}
+\SI{9.81}{\meter\per\second\squared}
+\SI{6.022e23}{\per\mole}
+\si{\kilo\gram\metre\per\second}
+k_B = 1.380649 \times 10^{-23}\ \mathrm{J/K}
+# chemistry
+\ce{2H2 + O2 -> 2H2O}
+\ce{CH4 + 2O2 -> CO2 + 2H2O}
+\ce{N2 + 3H2 <=> 2NH3}
+\ce{H2SO4 -> 2H+ + SO4^2-}
+\ce{Fe^3+ + e- -> Fe^2+}
+\Delta G^\circ = -RT \ln K
+\mathrm{pH} = -\log_{10}[\mathrm{H}^+]
+\ce{CaCO3 ->[\Delta] CaO + CO2 ^}
+K_a = \frac{[\mathrm{H^+}][\mathrm{A^-}]}{[\mathrm{HA}]}
+\ce{^{14}_{6}C -> ^{14}_{7}N + e^- + \bar{\nu}_e}
+\mathrm{C_6H_{12}O_6}
+\ce{Cu^2+ + 4NH3 -> [Cu(NH3)4]^2+}
+\Delta H = \sum \Delta H_f^\circ(\text{products}) - \sum \Delta H_f^\circ(\text{reactants})
+k = A e^{-E_a/(RT)}
+# computer science
+O(n \log n)
+T(n) = 2T(n/2) + \Theta(n) \implies T(n) = \Theta(n \log n)
+\Omega(n^2)
+\mathsf{P} \subseteq \mathsf{NP} \subseteq \mathsf{PSPACE}
+\mathsf{P} \stackrel{?}{=} \mathsf{NP}
+f(n) = O(g(n)) \iff \exists c, n_0 : f(n) \le c\,g(n) \ \forall n \ge n_0
+\sum_{i=0}^{n-1} 2^i = 2^n - 1
+\lfloor \log_2 n \rfloor + 1
+\lceil n/2 \rceil
+a \equiv b \pmod{m}
+\gcd(a, b) = \gcd(b, a \bmod b)
+H(n) = \sum_{k=1}^n \frac{1}{k} = \ln n + \gamma + O(1/n)
+\mathbb{Z}/n\mathbb{Z}
+x \oplus y
+\neg (p \land q) \equiv \neg p \lor \neg q
+\{0,1\}^n \to \{0,1\}
+\delta : Q \times \Sigma \to Q
+L = \{ a^n b^n \mid n \ge 0 \}
+\Pr[\text{collision}] \approx 1 - e^{-k^2/(2N)}
+\binom{n}{2} = \frac{n(n-1)}{2}
+C_n = \frac{1}{n+1}\binom{2n}{n}
+F_n = F_{n-1} + F_{n-2}
+\phi = \frac{1 + \sqrt{5}}{2}
+2^{10} = 1024
+# Chinese and other text inside formulas
+\text{速度} = \frac{\text{距离}}{\text{时间}}
+P(\text{正面}) = \frac{1}{2}
+\text{面积} = \pi r^2
+$$ f(x) = \begin{cases} x^2, & \text{当 } x \ge 0 \\ -x, & \text{当 } x < 0 \end{cases}
+\text{总成本} = \text{固定成本} + \text{单位成本} \times n
+\text{若 } a > b \text{，则 } a - b > 0
+E = \text{能量}, \quad m = \text{质量}
+\text{准确率} = \frac{\text{正确样本数}}{\text{总样本数}}
+\text{機率}(A) = \frac{|A|}{|\Omega|}
+\text{확률} \; P(A) \in [0, 1]
+\text{確率} \, P(X = x)
+\text{if } n \text{ is even}
+\text{for all } x \in S
+v = 3\ \text{m/s}
+\text{déjà vu} \neq \text{naïve}
+# aligned derivations
+$$ \begin{aligned} (a+b)^2 &= (a+b)(a+b) \\ &= a^2 + 2ab + b^2 \end{aligned}
+$$ \begin{aligned} \frac{d}{dx}\left( x^2 \sin x \right) &= 2x \sin x + x^2 \cos x \end{aligned}
+$$ \begin{align} \mathbb{E}[(X - \mu)^2] &= \mathbb{E}[X^2] - 2\mu\mathbb{E}[X] + \mu^2 \\ &= \mathbb{E}[X^2] - \mu^2 \end{align}
+$$ \begin{aligned} f(x) &= x^3 - 3x \\ f'(x) &= 3x^2 - 3 = 0 \\ \Rightarrow x &= \pm 1 \end{aligned}
+$$ \begin{align*} \int_0^1 x e^x \, dx &= \left[ x e^x \right]_0^1 - \int_0^1 e^x \, dx \\ &= e - (e - 1) \\ &= 1 \end{align*}
+$$ \begin{cases} 2x + y = 5 \\ x - y = 1 \end{cases} \implies \begin{cases} x = 2 \\ y = 1 \end{cases}
+$$ \begin{aligned} \text{总收入} &= p \cdot q \\ &= 10 \times 50 \\ &= 500 \end{aligned}
+$$ \begin{equation} \mathbf{y} = X\boldsymbol{\beta} + \boldsymbol{\varepsilon} \end{equation}
+$$ \begin{gather} a = b + c \\ d = e + f \end{gather}
+$$ x = \frac{3 \pm \sqrt{9 - 8}}{2} = \frac{3 \pm 1}{2} \Rightarrow x_1 = 2,\ x_2 = 1
+$$ \begin{aligned} \nabla_\theta J(\theta) &= \mathbb{E}_{\pi_\theta}\left[ \nabla_\theta \log \pi_\theta(a|s)\, Q^{\pi}(s,a) \right] \end{aligned}
+$$ S_n = \sum_{k=1}^{n} k = \frac{n(n+1)}{2} \tag{1}
+$$ \begin{aligned} L(\mathbf{w}) &= \frac{1}{2}\|\mathbf{y} - X\mathbf{w}\|^2 \\ \frac{\partial L}{\partial \mathbf{w}} &= -X^\top(\mathbf{y} - X\mathbf{w}) = 0 \end{aligned}
+$$ \underbrace{1 + 2 + \cdots + n}_{n \text{ terms}} = \frac{n(n+1)}{2}
+$$ \boxed{\, x = \frac{-b \pm \sqrt{b^2-4ac}}{2a} \,}
+$$ \left\{ \begin{array}{ll} x + y = 3 & (1) \\ x - y = 1 & (2) \end{array} \right.
+# misc notation
+\mathbb{N} \subset \mathbb{Z} \subset \mathbb{Q} \subset \mathbb{R} \subset \mathbb{C}
+A \cup B, \; A \cap B, \; A \setminus B, \; A^c
+|A \cup B| = |A| + |B| - |A \cap B|
+f: X \to Y, \; x \mapsto f(x)
+g \circ f
+\{ x \in \mathbb{R} : x > 0 \}
+\emptyset
+\aleph_0 < 2^{\aleph_0}
+\mathcal{P}(S)
+\approx \quad \simeq \quad \cong \quad \equiv \quad \propto
+x_{1:n}, \; y^{(i)}, \; z_t^{\ell}
+\dots \quad \cdots \quad \vdots \quad \ddots
+\hat{y}, \tilde{x}, \bar{z}, \dot{q}, \ddot{q}, \vec{v}, \overline{AB}
+\mathbb{R}^n \ni \mathbf{x} \mapsto \|\mathbf{x}\| \in \mathbb{R}_{\ge 0}
+\angle ABC = 90^\circ
+\triangle ABC \sim \triangle DEF
+a \parallel b, \quad c \perp d
+\checkmark \quad \times
+10\% \text{ of } \$200 = \$20
+1\,000\,000 = 10^6
+\frac{1}{2} < \tfrac{2}{3} \le \dfrac{3}{4}
+\sqrt[n]{x^m} = x^{m/n}
+\left\lfloor \frac{n}{2} \right\rfloor
+\prod_{i=1}^n x_i
+\bigcup_{i=1}^\infty A_i
+\max_{1 \le i \le n} |a_i|
+\underset{x \in \mathcal{X}}{\operatorname{argmax}}\, f(x)
+f(x) = \begin{cases} 1 & x \in \mathbb{Q} \\ 0 & x \notin \mathbb{Q} \end{cases}
+\Re(z) = \frac{z + \bar{z}}{2}, \quad \Im(z) = \frac{z - \bar{z}}{2i}
+z = re^{i\theta} = r(\cos\theta + i \sin\theta)
+x \div y \quad x \bmod y
+\xrightarrow{\text{rate}} \quad \xleftarrow[\text{back}]{}
+n \to \infty
+a_n \nearrow L
+\mathrm{d}x \quad \mathrm{d}\mathbf{x} \quad \mathrm{d}^3 r
+\partial_\mu \phi \, \partial^\mu \phi
+\epsilon_{ijk}
+\delta_{ij} = \begin{cases} 1 & i = j \\ 0 & i \ne j \end{cases}
+\abs{x} \quad \norm{\mathbf{v}}_2 \quad \floor{x} \quad \ceil{x}
+\R^n \quad \N \quad \Z \quad \Q \quad \C
+\argmin_x \quad \argmax_\theta \quad \sgn(x) \quad \diag(\lambda_1, \dots, \lambda_n)
+\dv{f}{x} \quad \pdv{f}{y} \quad \dd x
+α + β = γ
+x² + y² = r²
+∀x ∈ ℝ, ∃y : y > x
+ΔG = ΔH − TΔS
+T = 25\,\text{°C}
+\text{学習率} \eta = 0.01
+P(\text{spam} \mid \text{"free"})
+$$ \left[\begin{array}{cc|c} 1 & 2 & 3 \\ 4 & 5 & 6 \end{array}\right]
+\pdv{f}{x}{y} = \pdv{f}{y}{x}
+\dd[3]{x} \quad \vb*{\sigma} \quad \abs{\frac{a}{b}}
+A \bigtriangleup B = (A \setminus B) \cup (B \setminus A)
+\sin[2](x) + \cos[2](x) = 1
+$$ \underbrace{a_1 + \cdots + a_n}_{\mathclap{\text{n terms}}}

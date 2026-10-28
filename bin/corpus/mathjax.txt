@@ -1,0 +1,179 @@
+# MathJax 3 TeX input: examples for the TeX extensions of
+# https://docs.mathjax.org/en/latest/input/tex/extensions/, one or more per
+# extension (base and ams first), written for this corpus.
+# One formula per line; "$$ " starts a display formula.
+#
+# base
+x = {-b \pm \sqrt{b^2-4ac} \over 2a}
+\left( \frac{a}{b} \right)^{n} \quad \Big\langle x \Big\rangle
+{n \choose k} + {a \atop b} + {a \brack b} + {a \brace b}
+\mathop{\rm lim\,sup}_{n\to\infty} a_n
+\sqrt[3]{x} + \root 3 \of {y}
+\overbrace{a+\cdots+a}^{n\text{ times}} \cdot \underbrace{b+\cdots+b}_{m}
+\hat{a}\ \check{a}\ \tilde{a}\ \acute{a}\ \grave{a}\ \dot{a}\ \ddot{a}\ \breve{a}\ \bar{a}\ \vec{a}
+\widehat{xyz} \quad \widetilde{xyz} \quad \overline{xyz} \quad \underline{xyz}
+\overrightarrow{AB} \quad \overleftarrow{AB} \quad \overleftrightarrow{AB}
+\mathrm{A}\mathit{B}\mathbf{C}\mathsf{D}\mathtt{E}\mathcal{F}\mathbb{G}\mathfrak{H}\mathscr{I}
+\displaystyle\sum_{i=1}^n i \quad \textstyle\sum_{i=1}^n i \quad \scriptstyle x
+\big( \Big( \bigg( \Bigg( \quad \bigl[ \bigr] \quad \Biggl\{ \Biggr\}
+a \mathrel{\#} b \quad a \mathbin{\star} b \quad \mathord{+}
+x \mathpunct{,} y \quad \mathinner{\ldots}
+\buildrel \rm def \over = \quad \stackrel{?}{=} \quad \overset{!}{=} \quad \underset{x\to0}{\lim}
+\phantom{xx} a \hphantom{b} c \vphantom{\int} d \smash{\displaystyle\sum} e
+\hbox{text in a box} \quad \mbox{another} \quad \fbox{framed}
+\mathchoice{D}{T}{S}{SS} \quad {\scriptstyle\mathchoice{D}{T}{S}{SS}}
+a\,b\:c\;d\!e\quad f\qquad g \enspace h \thinspace i \negthinspace j
+\hskip 1em \kern 2pt \mkern 3mu \mskip 4mu a
+\rule{2em}{1pt} \quad \Rule{1em}{1em}{0.2em}
+\lbrace \rbrace \lbrack \rbrack \langle \rangle \lvert \rvert \lVert \rVert \lfloor \rfloor \lceil \rceil
+\moveleft 1em \hbox{x} \raise 2pt \hbox{y} \lower 2pt \hbox{z}
+\char"41 \quad \mathstrut a
+\not= \quad \not\in \quad \not\subset
+\iff \implies \impliedby \to \gets \mapsto \longmapsto
+\operatorname{sgn}(x) \quad \operatorname*{argmin}_x f(x)
+\pmod{m} \quad a \bmod b \quad a \equiv b \pmod n \quad \pod{n}
+\cases{x & if $x>0$ \cr -x & otherwise}
+\matrix{a & b \cr c & d} \quad \pmatrix{1 & 0 \cr 0 & 1}
+\begin{array}{|l|c|r|} \hline a & b & c \\ \hline 1 & 2 & 3 \\ \hline \end{array}
+\begin{array}{cc} \cline{1-1} a & b \\ \end{array}
+\color{red}{x} + \color{blue} y
+\textcolor{green}{x} + \colorbox{yellow}{$y$} + \fcolorbox{red}{white}{$z$}
+\def\RR{\mathbb{R}} f\colon \RR \to \RR
+\newcommand{\norm}[1]{\lVert#1\rVert} \norm{x}
+\let\phi\varphi \phi(x)
+\Huge x \LARGE y \Large z \large w \normalsize v \small u \footnotesize t \scriptsize s \tiny r
+# ams
+$$ \begin{align} a &= b + c \\ d &= e + f \end{align}
+$$ \begin{align*} f(x) &= x^2 \\ &= x \cdot x \end{align*}
+$$ \begin{gather} a = b \\ c = d \end{gather}
+$$ \begin{multline} a + b + c + d \\ + e + f + g \end{multline}
+$$ \begin{split} a &= b \\ &= c \end{split}
+$$ \begin{alignat}{2} x &= y & \quad z &= w \end{alignat}
+$$ \begin{flalign} a &= b & c &= d \end{flalign}
+$$ \begin{eqnarray} a &=& b \\ c &=& d \end{eqnarray}
+$$ \begin{equation} E = mc^2 \label{eq:emc} \end{equation}
+$$ x = y \tag{1.1} \quad
+$$ x = y \tag*{(*)}
+\eqref{eq:emc} \quad \ref{eq:emc}
+$$ \begin{align} a &= b \nonumber \\ c &= d \notag \end{align}
+\begin{matrix} a & b \\ c & d \end{matrix} \begin{pmatrix} a \\ b \end{pmatrix} \begin{bmatrix} a \end{bmatrix}
+\begin{Bmatrix} a \end{Bmatrix} \begin{vmatrix} a \end{vmatrix} \begin{Vmatrix} a \end{Vmatrix}
+\left( \begin{smallmatrix} a & b \\ c & d \end{smallmatrix} \right)
+\begin{cases} 1 & x > 0 \\ 0 & x \le 0 \end{cases}
+\begin{subarray}{c} i \\ j \end{subarray} \quad \sum_{\substack{0<i<m \\ 0<j<n}} P(i,j)
+\sideset{_a^b}{_c^d}\sum \quad \sideset{}{'}\sum_{n<k} a_n
+\dfrac{a}{b} \tfrac{a}{b} \dbinom{n}{k} \tbinom{n}{k} \genfrac{[}{]}{0pt}{}{n}{k}
+\cfrac{1}{1+\cfrac{1}{1+x}}
+\xrightarrow[under]{over} \quad \xleftarrow{long label}
+\boxed{E = mc^2} \quad \overset{\text{def}}{=} \quad \underset{\text{min}}{\arg}
+\iint \iiint \iiiint \idotsint
+\dddot{x} \quad \ddddot{x}
+\lvert x \rvert \lVert y \rVert
+\varGamma \varDelta \varOmega
+\sqrt[\leftroot{2}\uproot{2} n]{x} \quad \sqrt[\leftroot{-1}\uproot{3} \beta]{k}
+\mspace{12mu} a
+\nobreakspace a \allowbreak b
+$$ \begin{align} a &= b \\ \intertext{and} c &= d \end{align}
+$$ \begin{multline} a \\ \shoveleft{b} \\ c \end{multline}
+\text{\textbf{bold} \textit{italic} \emph{emph}}
+# amscd
+$$ \begin{CD} A @>f>> B \\ @VgVV @VVhV \\ C @>>k> D \end{CD}
+$$ \begin{CD} A @<<< B @= C \\ @AAA @| @VVV \\ D @. E @>>> F \end{CD}
+# bbox
+\bbox[yellow]{x + y}
+\bbox[5px, border: 2px solid red]{\frac{a}{b}}
+\bbox[#ffd, border: 1px solid blue, 3px]{E = mc^2}
+# boldsymbol
+\boldsymbol{\alpha + \beta} \quad \boldsymbol{x}
+# braket
+\bra{\phi} \ket{\psi} \braket{\phi|\psi}
+\Bra{\phi} \Ket{\psi} \Braket{\phi | A | \psi}
+\set{x | x > 0} \quad \Set{x \in \mathbb{R} | x^2 < 1}
+# cancel
+\cancel{x} + \bcancel{y} + \xcancel{z}
+\cancelto{0}{x^2 - x^2}
+# cases (numcases)
+$$ \begin{numcases}{f(x)=} 1 & x > 0 \\ 0 & x \le 0 \end{numcases}
+$$ \begin{subnumcases}{|x|=} x & x \ge 0 \\ -x & x < 0 \end{subnumcases}
+# centernot
+a \centernot\implies b \quad \centernot\longrightarrow
+# colorv2 and color
+{\color{red} x} + \color{blue}{y}
+\definecolor{myorange}{RGB}{255,165,0} \color{myorange} z
+\textcolor{#0a0}{x} \colorbox{#ffcc00}{$a$}
+# empheq
+$$ \begin{empheq}[left=\empheqlbrace]{align} a &= b \\ c &= d \end{empheq}
+$$ \begin{empheq}[box=\fbox]{align} E &= mc^2 \end{empheq}
+# enclose
+\enclose{circle}{x} \quad \enclose{box}{y} \quad \enclose{updiagonalstrike}{z}
+\enclose{horizontalstrike}{a} \quad \enclose{top,bottom}{b} \quad \enclose{roundedbox}[mathcolor=red]{c}
+\enclose{longdiv}{12}
+# extpfeil
+\xtwoheadrightarrow{abc} \quad \xtwoheadleftarrow[x]{abc}
+\xmapsto{f} \quad \xlongequal{\text{def}} \quad \xtofrom[g]{f}
+\Newextarrow{\xrightharpoonup}{5,10}{0x21C0} \xrightharpoonup{x}
+# gensymb
+30\degree \quad 20\celsius \quad 5\perthousand \quad 10\ohm \quad 3\micro
+# html
+\href{https://www.mathjax.org}{\text{MathJax}} \quad \class{red}{x} \quad \cssId{myid}{y}
+\style{color:red}{z} \quad \data{a=b}{w}
+# mathtools
+a \coloneqq b \quad c \eqqcolon d \quad e \Coloneqq f \quad \dblcolon
+\begin{dcases} \frac{1}{x} & x > 0 \\ 0 & \text{else} \end{dcases}
+\begin{rcases} a & b \\ c & d \end{rcases} \quad \begin{drcases} x & y \end{drcases}
+\mathclap{\sum} \quad \mathllap{x} \mathrlap{y} \quad \clap{z} \llap{w} \rlap{v}
+\prescript{14}{6}{\mathrm{C}} \quad \splitfrac{a+b}{c+d} \quad \splitdfrac{a}{b}
+\underbracket{a+b}_{x} \quad \overbracket{c+d}^{y}
+\xleftrightarrow{abc} \quad \xLeftarrow{x} \quad \xRightarrow{y} \quad \xLeftrightarrow{z}
+\xhookleftarrow{a} \quad \xhookrightarrow{b} \quad \xrightharpoondown{c} \quad \xleftrightharpoons{d}
+\smashoperator{\sum_{1 \le i \le j \le n}} x_{ij}
+\adjustlimits\lim_{n\to\infty} \sup_{p\ge n} a_p
+\cramped{x^2} \quad \crampedclap{y}
+\mathmbox{x} \quad \mathmakebox[2em][l]{y}
+$$ \begin{align} \MoveEqLeft a + b + c \\ &= d \end{align}
+$$ \begin{align} \Aboxed{a &= b} \end{align}
+$$ \begin{align} a &= b \\ \vdotswithin{=} \\ c &= d \end{align}
+$$ \begin{align} a &= b \shortintertext{so} c &= d \end{align}
+\begin{matrix*}[r] -1 & 2 \\ 3 & -4 \end{matrix*} \quad \begin{bmatrix*}[l] a \end{bmatrix*}
+\begin{multlined} a + b \\ + c \end{multlined}
+\begin{gathered} a \\ b \end{gathered} \quad \begin{lgathered} a \\ b \end{lgathered}
+\lparen x \rparen
+\ndownarrow \nuparrow
+\DeclarePairedDelimiter\abs{\lvert}{\rvert} \abs{x}
+# mhchem
+\ce{H2O} \quad \ce{CO2 + C -> 2CO} \quad \ce{A <=> B}
+\ce{^{227}_{90}Th+} \quad \ce{SO4^2-} \quad \ce{[Cu(NH3)4]^2+}
+\ce{CH3-CH=CH2} \quad \ce{A ->[\Delta] B} \quad \ce{Hg^2+ ->[I-] HgI2}
+\pu{123 kJ/mol} \quad \pu{1.2e3 m/s^2}
+\ce{2H2 + O2 -> 2H2O} \quad \ce{NaCl(aq)} \quad \ce{H2O(l) <=> H+(aq) + OH-(aq)}
+# physics
+\abs{x} \quad \norm{v} \quad \qty(\frac{a}{b}) \quad \qty[x] \quad \qty|y|
+\pqty{a} \bqty{b} \Bqty{c} \vqty{d}
+\dv{f}{x} \quad \dv[2]{f}{x} \quad \pdv{f}{x} \quad \pdv{f}{x}{y} \quad \dd{x}
+\grad{\phi} \quad \curl{\vb{A}} \quad \divergence{\vb{E}} \quad \laplacian{u}
+\vb{F} = m\va{a} \quad \vu{n}
+\bra{a}\ket{b} \quad \braket{a}{b} \quad \ketbra{a}{b} \quad \expval{A} \quad \expval{A}{\psi} \quad \mel{n}{H}{m}
+\comm{A}{B} \quad \acomm{A}{B} \quad \pb{f}{g}
+\order{x^2} \quad \eval{x^2}_0^1 \quad \tr{A} \quad \Tr{\rho} \quad \rank{M}
+\mqty(a & b \\ c & d) \quad \pmqty{1 & 0 \\ 0 & 1} \quad \bmqty{1 & 2} \quad \vmqty{a & b \\ c & d}
+\Res f \quad \pv \int f \quad \erf(x) \quad \erfc(x)
+# upgreek
+\upalpha \upbeta \upgamma \updelta \upepsilon \upmu \uppi \uptau \upomega
+\Upgamma \Updelta \Uptheta \Uplambda \Upsigma \Upphi \Uppsi \Upomega
+# unicode
+\unicode{x2124} \quad \unicode[Arial]{x221E} \quad \unicode{8721}
+\unicode{x263A}
+# verb
+\verb|a_b^c| \quad \verb!{x}! \quad \verb*|a b|
+# textmacros
+\text{if $x > 0$ then \textbf{positive}, else \emph{not}}
+\text{50\% \& \$5 \# 3 \_ x}
+\text{\'e\`e\^e\"e\~n\c{c} --- -- ``quoted''}
+\text{\ldots\ \dots\ \S 3 \P\ \dag\ \ddag}
+# action, setoptions, tagformat, noundefined
+\mathtip{x}{a tooltip} \quad \texttip{y}{tip} \quad \toggle{a}{b}{c}\endtoggle
+\require{cancel} \cancel{z}
+# miscellaneous MathJax-only commands
+\iddots \quad \smash[t]{x} \quad \smash[b]{y}
+\Space{1em}{1em}{0em} x
+\mmlToken{mi}{x}

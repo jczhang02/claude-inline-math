@@ -12,6 +12,8 @@
 //   markdown does); none where the source had none ("Steps:\n1. ...").
 // - A 'markdown' Block with an indent (code, a table or a quote inside a
 //   list item) is drawn that many cells in, under the item's text.
+// - Formulas reach the blocks with the reply's own macros expanded (see
+//   "Reply-scoped macros"); one that held only definitions is left out.
 
 export type Picture = { png: string; columns: number; rows: number; textRow: number }
 // `isBackend`: the failure is not the formula's own (the renderer could not
@@ -24,6 +26,9 @@ export type Block =
   | { kind: 'markdown'; text: string; indent?: number; gapBefore?: boolean }
   | { kind: 'paragraph'; inlines: Inline[]; marker?: string; indent: number; gapBefore?: boolean }
   | { kind: 'display'; latex: string; indent: number; gapBefore?: boolean }
+  // A closed ```mermaid fence at the top level or in a list item: `source`
+  // is its body, without the fences and the fence's own indentation.
+  | { kind: 'mermaid'; source: string; indent: number; gapBefore?: boolean }
 export type MathRef = { latex: string; display: boolean }
 export type Run =
   | { kind: 'text'; text: string; style: Style; marginTop: number }
@@ -812,6 +817,403 @@ export function toUnicode(latex: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Reply-scoped macros
+//
+// A reply may define its own commands in its math (`\newcommand`,
+// `\renewcommand`, `\providecommand`, `\def`, `\let`,
+// `\DeclareMathOperator`). They are expanded here, as text, in every formula
+// of the reply, so TeX never sees a definition and the expanded formula
+// still passes the renderer's safety check. A formula that held only
+// definitions draws as nothing. One table per reply; a name defined twice
+// takes its last definition. A use whose expansion nests deeper than
+// MACRO_DEPTH or grows past MACRO_LENGTH leaves that formula as written.
+
+type Macro = { arity: number; optional?: string; body: string; provide?: boolean }
+type MacroTable = Map<string, Macro>
+
+const MACRO_DEPTH = 32
+const MACRO_LENGTH = 8000
+const MACRO_EXPANSIONS = 4000
+// Cheap test: can this text define a macro at all?
+const DEFINES = /\\(?:(?:re)?newcommand|providecommand|[gex]?def|let|DeclareMathOperator)(?![A-Za-z])/
+// `\global` before a definition is read and dropped (a reply's table is global anyway).
+const DEFINITION = /\\(?:global\s*\\)?(?:((?:re)?newcommand|providecommand)|([gex]?def)|(let)|(DeclareMathOperator))(?![A-Za-z])(\*?)/y
+
+class MacroError extends Error {}
+
+function skipSpace(s: string, i: number): number {
+  let j = i
+  while (j < s.length && /\s/.test(s[j] as string)) {
+    j++
+  }
+
+  return j
+}
+
+/** A control sequence at i (`\name` or `\x`), or null. */
+function controlAt(s: string, i: number): { name: string; end: number } | null {
+  if (s[i] !== '\\' || i + 1 >= s.length) {
+    return null
+  }
+  const word = /^[A-Za-z]+/.exec(s.slice(i + 1, i + 80))
+  if (word) {
+    return { name: `\\${word[0]}`, end: i + 1 + word[0].length }
+  }
+  const code = s.codePointAt(i + 1) ?? 0
+  const size = code > 0xffff ? 2 : 1
+
+  return { name: s.slice(i, i + 1 + size), end: i + 1 + size }
+}
+
+/** The end of the balanced `{...}` group opening at i (just past its `}`), or -1. */
+function groupEnd(s: string, i: number): number {
+  let depth = 0
+  for (let j = i; j < s.length; j++) {
+    const c = s[j]
+    if (c === '\\') {
+      j++
+    } else if (c === '{') {
+      depth++
+    } else if (c === '}') {
+      depth--
+      if (depth === 0) {
+        return j + 1
+      }
+    }
+  }
+
+  return -1
+}
+
+/** One undelimited argument at i, as TeX reads it: a group's content, a control sequence or one character. */
+function readArgument(s: string, i: number): { text: string; end: number } | null {
+  const j = skipSpace(s, i)
+  const c = s[j]
+  if (c === undefined || c === '}' || c === '#') {
+    return null
+  }
+  if (c === '{') {
+    const end = groupEnd(s, j)
+    return end < 0 ? null : { text: s.slice(j + 1, end - 1), end }
+  }
+  const control = controlAt(s, j)
+  if (control) {
+    return { text: control.name, end: control.end }
+  }
+  const code = s.codePointAt(j) ?? 0
+  const size = code > 0xffff ? 2 : 1
+
+  return { text: s.slice(j, j + size), end: j + size }
+}
+
+/** An optional `[...]` argument at i (brackets inside braces do not close it), or null. */
+function readOptional(s: string, i: number): { text: string; end: number } | null {
+  const j = skipSpace(s, i)
+  if (s[j] !== '[') {
+    return null
+  }
+  let depth = 0
+  for (let k = j + 1; k < s.length; k++) {
+    const c = s[k]
+    if (c === '\\') {
+      k++
+    } else if (c === '{') {
+      depth++
+    } else if (c === '}') {
+      depth--
+    } else if (c === ']' && depth === 0) {
+      return { text: s.slice(j + 1, k), end: k + 1 }
+    }
+  }
+
+  return null
+}
+
+/** The name a definition defines: `{\name}` or `\name`. */
+function readName(s: string, i: number): { name: string; end: number } | null {
+  const j = skipSpace(s, i)
+  if (s[j] === '{') {
+    const end = groupEnd(s, j)
+    if (end < 0) {
+      return null
+    }
+    const inner = s.slice(j + 1, end - 1).trim()
+    const control = controlAt(inner, 0)
+    return control && control.end === inner.length ? { name: control.name, end } : null
+  }
+  const control = controlAt(s, j)
+
+  return control ? { name: control.name, end: control.end } : null
+}
+
+/** The definition starting at i: what it defines and where it ends; null when it is not one this reads. */
+function readDefinition(s: string, i: number): { name: string; macro: Macro; end: number } | null {
+  DEFINITION.lastIndex = i
+  const m = DEFINITION.exec(s)
+  if (!m) {
+    return null
+  }
+  const star = m[5] === '*'
+  const at = m.index + m[0].length
+  if (m[1]) {
+    const name = readName(s, at)
+    if (!name) {
+      return null
+    }
+    let end = name.end
+    let arity = 0
+    let optional: string | undefined
+    const count = readOptional(s, end)
+    if (count) {
+      if (!/^\s*[0-9]\s*$/.test(count.text)) {
+        return null
+      }
+      arity = Number(count.text.trim())
+      end = count.end
+      const fallback = readOptional(s, end)
+      if (fallback && arity > 0) {
+        optional = fallback.text
+        end = fallback.end
+      }
+    }
+    const j = skipSpace(s, end)
+    if (s[j] !== '{') {
+      return null
+    }
+    const close = groupEnd(s, j)
+    if (close < 0) {
+      return null
+    }
+    return { name: name.name, macro: { arity, optional, body: s.slice(j + 1, close - 1), provide: m[1] === 'providecommand' }, end: close }
+  }
+  if (m[2]) {
+    if (star) {
+      return null
+    }
+    const name = controlAt(s, skipSpace(s, at))
+    if (!name) {
+      return null
+    }
+    const open = s.indexOf('{', name.end)
+    if (open < 0) {
+      return null
+    }
+    // Only undelimited parameters, #1#2... in order.
+    const params = s.slice(name.end, open).replace(/\s+/g, '')
+    if (!/^(?:#[1-9])*$/.test(params) || params !== Array.from({ length: params.length / 2 }, (_, k) => `#${k + 1}`).join('')) {
+      return null
+    }
+    const close = groupEnd(s, open)
+    if (close < 0) {
+      return null
+    }
+    return { name: name.name, macro: { arity: params.length / 2, body: s.slice(open + 1, close - 1) }, end: close }
+  }
+  if (m[3]) {
+    if (star) {
+      return null
+    }
+    const name = controlAt(s, skipSpace(s, at))
+    if (!name) {
+      return null
+    }
+    let j = skipSpace(s, name.end)
+    if (s[j] === '=') {
+      j = skipSpace(s, j + 1)
+    }
+    const target = controlAt(s, j)
+    if (!target) {
+      return null
+    }
+    return { name: name.name, macro: { arity: 0, body: target.name }, end: target.end }
+  }
+  const name = readName(s, at)
+  if (!name) {
+    return null
+  }
+  const text = readArgument(s, name.end)
+  if (!text) {
+    return null
+  }
+
+  return { name: name.name, macro: { arity: 0, body: `\\operatorname${star ? '*' : ''}{${text.text}}` }, end: text.end }
+}
+
+/** A formula with its definitions taken out, and the definitions (in order). */
+function splitDefinitions(latex: string): { rest: string; found: { name: string; macro: Macro }[] } {
+  const found: { name: string; macro: Macro }[] = []
+  if (!DEFINES.test(latex)) {
+    return { rest: latex, found }
+  }
+  let rest = ''
+  let i = 0
+  while (i < latex.length) {
+    const c = latex[i]
+    if (c === '\\') {
+      const definition = readDefinition(latex, i)
+      if (definition) {
+        found.push({ name: definition.name, macro: definition.macro })
+        i = skipSpace(latex, definition.end)
+        continue
+      }
+      rest += latex.slice(i, i + 2)
+      i += 2
+      continue
+    }
+    rest += c
+    i++
+  }
+
+  return { rest, found }
+}
+
+const ENDS_IN_WORD = /\\[A-Za-z]+$/
+const STARTS_WITH_LETTER = /^[A-Za-z]/
+
+/**
+ * The body with `#n` replaced by the arguments. Where pasting would glue a
+ * control word to a letter (`\lVert#1` with `x`, or `#1x` with `\alpha`), a
+ * space keeps them apart, as TeX's own tokens are: `\lVert x`, not `\lVertx`.
+ */
+function substitute(body: string, args: string[]): string {
+  return body.replace(/#(#|[1-9])/g, (all, which: string, at: number) => {
+    if (which === '#') {
+      return '#'
+    }
+    const arg = args[Number(which) - 1]
+    if (arg === undefined) {
+      return all
+    }
+    const before = ENDS_IN_WORD.test(body.slice(Math.max(0, at - 80), at)) && STARTS_WITH_LETTER.test(arg) ? ' ' : ''
+    const after = ENDS_IN_WORD.test(arg) && STARTS_WITH_LETTER.test(body.slice(at + all.length, at + all.length + 1)) ? ' ' : ''
+
+    return before + arg + after
+  })
+}
+
+/** Expand every use of the table's macros in `latex`. Throws MacroError past the caps. */
+function expandUses(latex: string, table: MacroTable, depth: number, budget: { left: number }): string {
+  if (depth > MACRO_DEPTH) {
+    throw new MacroError('macros nested too deep')
+  }
+  let out = ''
+  let i = 0
+  while (i < latex.length) {
+    const c = latex[i] as string
+    if (c !== '\\') {
+      out += c
+      i++
+      continue
+    }
+    const control = controlAt(latex, i)
+    const macro = control ? table.get(control.name) : undefined
+    if (!control || !macro) {
+      const end = control ? control.end : i + 1
+      out += latex.slice(i, end)
+      i = end
+      continue
+    }
+    budget.left--
+    if (budget.left < 0) {
+      throw new MacroError('too many macro expansions')
+    }
+    const args: string[] = []
+    let end = control.end
+    if (macro.optional !== undefined) {
+      const given = readOptional(latex, end)
+      args.push(given ? given.text : macro.optional)
+      end = given ? given.end : end
+    }
+    while (args.length < macro.arity) {
+      const arg = readArgument(latex, end)
+      if (!arg) {
+        throw new MacroError(`${control.name} is missing an argument`)
+      }
+      args.push(arg.text)
+      end = arg.end
+    }
+    let expanded = expandUses(substitute(macro.body, args), table, depth + 1, budget)
+    // `\x` defined as `\alpha` and used as `\x b`: keep a space so the
+    // result does not read as `\alphab`.
+    if (ENDS_IN_WORD.test(expanded) && STARTS_WITH_LETTER.test(latex.slice(end, end + 1))) {
+      expanded += ' '
+    }
+    out += expanded
+    if (out.length > MACRO_LENGTH) {
+      throw new MacroError('macro expansion too long')
+    }
+    i = end
+  }
+
+  return out
+}
+
+// The reply being parsed: its macros and the expansions made so far. Set by
+// parseMessage for the length of one call, so every formula of the reply is
+// read through it; null outside one, or for a reply that defines nothing.
+let activeMacros: { table: MacroTable; done: Map<string, string> } | null = null
+
+/**
+ * A formula as it is drawn: its definitions taken out and the reply's
+ * macros expanded. '' when the formula held definitions only; the formula as
+ * written when an expansion breaks a cap or misses an argument.
+ */
+function expandMath(latex: string): string {
+  const macros = activeMacros
+  if (macros === null) {
+    return latex
+  }
+  const done = macros.done.get(latex)
+  if (done !== undefined) {
+    return done
+  }
+  const { rest, found } = splitDefinitions(latex)
+  let out: string
+  if (found.length > 0 && rest.trim() === '') {
+    out = ''
+  } else {
+    try {
+      // '' when every use expanded to nothing (`\newcommand{\x}{}\x`): drawn as nothing.
+      out = expandUses(rest, macros.table, 0, { left: MACRO_EXPANSIONS }).trim()
+    } catch (err) {
+      if (!(err instanceof MacroError)) {
+        throw err
+      }
+      out = latex
+    }
+  }
+  macros.done.set(latex, out)
+
+  return out
+}
+
+/** Every definition in a list of formulas, the later winning. */
+function macroTable(formulas: string[]): MacroTable {
+  const table: MacroTable = new Map()
+  for (const latex of formulas) {
+    for (const { name, macro } of splitDefinitions(latex).found) {
+      // \providecommand defines only what is not defined yet.
+      if (!(macro.provide && table.has(name))) {
+        table.set(name, macro)
+      }
+    }
+  }
+
+  return table
+}
+
+/** Expand the macros `definitions` defines in `latex` (for tests and callers outside a reply). */
+export function expandMacros(latex: string, definitions: string[]): string {
+  const saved = activeMacros
+  activeMacros = { table: macroTable([...definitions, latex]), done: new Map() }
+  try {
+    return expandMath(latex)
+  } finally {
+    activeMacros = saved
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Inline lexer (shared by hasMath, markdown conversion and paragraph parsing)
 
 type Delim = { t: 'delim'; ch: '*' | '_' | '~'; n: number; origN: number; canOpen: boolean; canClose: boolean }
@@ -1007,7 +1409,7 @@ function lexInline(text: string, options: LexOptions): Spanned[] {
     if (char === '\\') {
       const math = matchMath(text, i)
       if (math) {
-        push({ t: 'math', latex: math.latex, display: math.display }, i, math.end)
+        push({ t: 'math', latex: expandMath(math.latex), display: math.display }, i, math.end)
         i = math.end
         continue
       }
@@ -1032,7 +1434,7 @@ function lexInline(text: string, options: LexOptions): Spanned[] {
     } else if (char === '$') {
       const math = matchMath(text, i)
       if (math) {
-        push({ t: 'math', latex: math.latex, display: math.display }, i, math.end)
+        push({ t: 'math', latex: expandMath(math.latex), display: math.display }, i, math.end)
         i = math.end
         continue
       }
@@ -1300,8 +1702,14 @@ function convertInline(text: string): string {
     }
     out += text.slice(at, tok.start)
     const source = text.slice(tok.start, tok.end)
-    out += escapeMarkdown(toUnicode(tok.latex)) + '\n'.repeat((source.match(/\n/g) ?? []).length)
+    out += (tok.latex === '' ? '' : escapeMarkdown(toUnicode(tok.latex))) + '\n'.repeat((source.match(/\n/g) ?? []).length)
     at = tok.end
+    // A formula of definitions only leaves no second space behind.
+    if (tok.latex === '' && /[ \t]$/.test(out)) {
+      while (text[at] === ' ' || text[at] === '\t') {
+        at++
+      }
+    }
   }
 
   return out + text.slice(at)
@@ -1738,6 +2146,65 @@ function nodeHasMath(node: Node, lines: string[]): boolean {
   }
 }
 
+// The info string of a fence that draws as a diagram: 'mermaid', any case,
+// words after it ignored (as hooks/mermaid.ts's isMermaidInfo reads it).
+function isDiagramInfo(info: string): boolean {
+  return /^mermaid(?:\s|$)/i.test(info.trim())
+}
+
+/** A closed mermaid fence's body (the fence's indentation taken off its lines), or null. */
+function diagramSource(lines: string[], node: Node): string | null {
+  if (node.type !== 'fence' || node.end - node.start < 2) {
+    return null
+  }
+  const open = FENCE.exec(lines[node.start] as string)
+  if (!open || !isDiagramInfo(open[3] as string)) {
+    return null
+  }
+  const fence = open[2] as string
+  const close = /^ {0,3}(`+|~+)[ \t]*$/.exec(lines[node.end - 1] as string)
+  if (!close || (close[1] as string)[0] !== fence[0] || (close[1] as string).length < fence.length) {
+    return null
+  }
+  const indent = (open[1] as string).length
+
+  return lines
+    .slice(node.start + 1, node.end - 1)
+    .map(line => stripColumns(line, Math.min(indent, indentOf(line)))[1])
+    .join('\n')
+}
+
+function nodeHasDiagram(node: Node, lines: string[]): boolean {
+  if (node.type === 'fence') {
+    return diagramSource(lines, node) !== null
+  }
+  if (node.type === 'list') {
+    return node.items.some(item => item.children.some(child => nodeHasDiagram(child, item.inner)))
+  }
+
+  return false
+}
+
+// A fence line that opens a mermaid block (the scanner decides whether it
+// does). Anchored to a line start: unanchored, a long run of backticks made
+// every position a start, and the test took time growing with its square.
+const DIAGRAM_HINT = /^[ \t>*+\-\d.)]*(?:`{3,}|~{3,})[ \t]*mermaid/im
+
+/** Can the markdown hold a mermaid fence at all? A scan, no parse. */
+function mayHaveDiagram(markdown: string): boolean {
+  return /mermaid/i.test(markdown) && DIAGRAM_HINT.test(markdown)
+}
+
+/** True if the markdown holds a mermaid fence this mod draws (top level or in a list item). */
+export function hasDiagram(markdown: string): boolean {
+  if (!mayHaveDiagram(markdown)) {
+    return false
+  }
+  const lines = markdown.split(/\r?\n/)
+
+  return scanBlocks(lines).some(node => nodeHasDiagram(node, lines))
+}
+
 /** True if the markdown holds a formula outside code. */
 export function hasMath(markdown: string): boolean {
   if (!/[$\\]/.test(markdown) || !/\$\S|\\[([]/.test(markdown)) {
@@ -1777,7 +2244,8 @@ function convertNodes(nodes: Node[], lines: string[]): string[] {
         break
       case 'math': {
         const text = lines.slice(node.start, node.end).join('\n')
-        const stand = escapeMarkdown(toUnicode(mathBlockLatex(lines, node)))
+        const latex = mathBlockLatex(lines, node)
+        const stand = latex === '' ? '' : escapeMarkdown(toUnicode(latex))
         const indent = /^[ \t]*/.exec(text)?.[0] ?? ''
         out[node.start] = indent + stand
         for (let k = node.start + 1; k < node.end; k++) {
@@ -1895,12 +2363,24 @@ function cleanStyle(style: Style): Style {
   return out
 }
 
+// Set where a formula of definitions only was left out, so the text after it
+// does not keep a second space ("define $\newcommand...$ then" reads
+// "define then").
+let afterDropped = false
+
 function flatten(trees: Tree[], style: Style, out: Inline[]): void {
-  const pushText = (text: string, at: Style) => {
+  const pushText = (given: string, at: Style) => {
+    let text = given
+    const last = out[out.length - 1]
+    if (afterDropped && text !== '') {
+      afterDropped = false
+      if (last?.kind === 'text' && /[ \t]$/.test(last.text)) {
+        text = text.replace(/^[ \t]+/, '')
+      }
+    }
     if (text === '') {
       return
     }
-    const last = out[out.length - 1]
     if (last?.kind === 'text' && sameStyle(last.style, at)) {
       last.text += text
     } else {
@@ -1916,7 +2396,13 @@ function flatten(trees: Tree[], style: Style, out: Inline[]): void {
         pushText(tree.s, { ...style, code: true })
         break
       case 'math':
-        out.push({ kind: 'math', latex: tree.latex })
+        // A formula of macro definitions only draws as nothing.
+        if (tree.latex !== '') {
+          out.push({ kind: 'math', latex: tree.latex })
+          afterDropped = false
+        } else {
+          afterDropped = true
+        }
         break
       case 'br':
         pushText('\n', style)
@@ -1973,6 +2459,7 @@ function firstChar(inline: Inline | undefined): string | undefined {
 
 function toInlines(tokens: Tok[]): Inline[] {
   const out: Inline[] = []
+  afterDropped = false
   flatten(resolveEmphasis(tokens), {}, out)
   const resolved = resolveSoftBreaks(out)
   // Trim a leading or trailing hard break and surrounding spaces.
@@ -2006,6 +2493,9 @@ function splitParagraph(text: string): Piece[] {
   }
   for (let k = 0; k < tokens.length; k++) {
     const tok = tokens[k] as Spanned
+    if (tok.t === 'math' && tok.display && tok.latex === '') {
+      continue
+    }
     if (tok.t === 'math' && tok.display) {
       close(tok.start)
       let latex = tok.latex
@@ -2056,13 +2546,18 @@ function paragraphText(lines: string[], node: Node): string {
     .replace(/[ \t]+$/, '')
 }
 
-function mathBlockLatex(lines: string[], node: Node): string {
+function mathBlockSource(lines: string[], node: Node): string {
   const text = lines.slice(node.start, node.end).join('\n').trim()
   const open = text.startsWith('$$') ? '$$' : '\\['
   const close = open === '$$' ? '$$' : '\\]'
   const end = text.lastIndexOf(close)
 
   return text.slice(open.length, end >= open.length ? end : text.length).trim()
+}
+
+// A block formula as drawn: '' when it held only macro definitions.
+function mathBlockLatex(lines: string[], node: Node): string {
+  return expandMath(mathBlockSource(lines, node))
 }
 
 // Blocks for the content of a list item, or a paragraph that holds math.
@@ -2080,7 +2575,9 @@ function emitParagraph(lines: string[], node: Node, marker: string | undefined, 
       continue
     }
     if (!inList && !inlinesHaveMath(piece.inlines)) {
-      push(emit, { kind: 'markdown', text: piece.source })
+      // Formulas of definitions only, if any, come out; the source is
+      // otherwise kept as written (a link's address included).
+      push(emit, { kind: 'markdown', text: activeMacros !== null ? convertInline(piece.source) : piece.source })
     } else if (first && marker) {
       push(emit, { kind: 'paragraph', inlines: piece.inlines, marker, indent })
     } else {
@@ -2166,9 +2663,16 @@ function emitList(list: Extract<Node, { type: 'list' }>, indent: number, depth: 
       } else if (child.type === 'list') {
         markerOnly()
         emitList(child, hang, depth + 1, emit)
-      } else if (child.type === 'math') {
+      } else if (diagramSource(item.inner, child) !== null) {
         markerOnly()
-        push(emit, { kind: 'display', latex: mathBlockLatex(item.inner, child), indent: hang })
+        push(emit, { kind: 'mermaid', source: diagramSource(item.inner, child) as string, indent: hang })
+      } else if (child.type === 'math') {
+        const latex = mathBlockLatex(item.inner, child)
+        if (latex === '') {
+          continue
+        }
+        markerOnly()
+        push(emit, { kind: 'display', latex, indent: hang })
       } else {
         markerOnly()
         const converted = convertNodes([child], item.inner).slice(child.start, child.end)
@@ -2194,13 +2698,68 @@ function mergeMarkdown(blocks: Block[]): Block[] {
   return out.filter(block => block.kind !== 'markdown' || block.text.trim() !== '')
 }
 
-/** Split a reply into markdown to draw as is, paragraphs with formulas, and display formulas. */
+// Every formula of the nodes as written, in order (code left out).
+function collectFormulas(nodes: Node[], lines: string[], out: string[]): void {
+  for (const node of nodes) {
+    switch (node.type) {
+      case 'blank':
+      case 'fence':
+      case 'code':
+      case 'hr':
+        break
+      case 'math':
+        out.push(mathBlockSource(lines, node))
+        break
+      case 'quote':
+        collectFormulas(node.children, node.inner, out)
+        break
+      case 'list':
+        for (const item of node.items) {
+          collectFormulas(item.children, item.inner, out)
+        }
+        break
+      default:
+        for (const tok of lexInline(lines.slice(node.start, node.end).join('\n'), { links: false })) {
+          if (tok.t === 'math') {
+            out.push(tok.latex)
+          }
+        }
+    }
+  }
+}
+
+/**
+ * Split a reply into markdown to draw as is, paragraphs with formulas,
+ * display formulas and diagrams. The reply's own macros are expanded in
+ * every formula of it.
+ */
 export function parseMessage(markdown: string): Block[] {
-  if (!hasMath(markdown)) {
+  const mayMath = /[$\\]/.test(markdown) && /\$\S|\\[([]/.test(markdown)
+  if (!mayMath && !mayHaveDiagram(markdown)) {
     return [{ kind: 'markdown', text: markdown }]
   }
   const lines = markdown.split(/\r?\n/)
   const nodes = scanBlocks(lines)
+  if (!nodes.some(node => nodeHasMath(node, lines) || nodeHasDiagram(node, lines))) {
+    return [{ kind: 'markdown', text: markdown }]
+  }
+  const saved = activeMacros
+  activeMacros = null
+  if (DEFINES.test(markdown)) {
+    const formulas: string[] = []
+    collectFormulas(nodes, lines, formulas)
+    if (formulas.some(latex => DEFINES.test(latex))) {
+      activeMacros = { table: macroTable(formulas), done: new Map() }
+    }
+  }
+  try {
+    return emitBlocks(lines, nodes)
+  } finally {
+    activeMacros = saved
+  }
+}
+
+function emitBlocks(lines: string[], nodes: Node[]): Block[] {
   const emit: Emit = { blocks: [], gap: false }
   // Lines of markdown not yet emitted, from `pending` to the last node's end.
   let pendingStart = -1
@@ -2221,7 +2780,12 @@ export function parseMessage(markdown: string): Block[] {
       sawBlank = true
       continue
     }
-    const drawn = node.type === 'math' || ((node.type === 'paragraph' || node.type === 'list') && nodeHasMath(node, lines))
+    const diagram = diagramSource(lines, node)
+    const drawn =
+      node.type === 'math' ||
+      diagram !== null ||
+      ((node.type === 'paragraph' || node.type === 'list') && nodeHasMath(node, lines)) ||
+      (node.type === 'list' && nodeHasDiagram(node, lines))
     if (!drawn) {
       if (nodeHasMath(node, lines)) {
         converted = converted ?? lines.slice()
@@ -2240,8 +2804,14 @@ export function parseMessage(markdown: string): Block[] {
     flushPending()
     emit.gap = sawBlank
     sawBlank = false
-    if (node.type === 'math') {
-      push(emit, { kind: 'display', latex: mathBlockLatex(lines, node), indent: 0 })
+    if (diagram !== null) {
+      push(emit, { kind: 'mermaid', source: diagram, indent: 0 })
+    } else if (node.type === 'math') {
+      const latex = mathBlockLatex(lines, node)
+      if (latex === '') {
+        continue // definitions only
+      }
+      push(emit, { kind: 'display', latex, indent: 0 })
     } else if (node.type === 'list') {
       emitList(node, 0, 0, emit)
     } else {

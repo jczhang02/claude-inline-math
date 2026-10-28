@@ -1,10 +1,11 @@
 {
   "name": "inline-math",
-  "version": "1.0.0",
-  "description": "Draws the LaTeX in Claude's replies as typeset pictures, inline with the terminal text and on its baseline (kitty graphics: Ghostty, kitty; tmux with passthrough)",
+  "version": "2.0.0",
+  "description": "Draws the LaTeX in Claude's replies as typeset pictures, inline with the terminal text and on its baseline (kitty graphics: Ghostty, kitty; tmux with passthrough), and mermaid code blocks as Unicode diagrams",
   "author": { "name": "JC Zhang", "email": "chengrui0727@gmail.com" },
   "license": "MIT",
-  "keywords": ["latex", "math", "terminal", "kitty-graphics", "tmux"],
+  "keywords": ["latex", "math", "mermaid", "terminal", "kitty-graphics", "tmux"],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "enabled": {
       "type": "boolean",
@@ -51,7 +52,25 @@
     "promptHint": {
       "type": "boolean",
       "title": "Tell Claude about it",
-      "description": "Add a short note to the system prompt: write math as $...$ and $$...$$, never in code blocks.",
+      "description": "Add a short note to the system prompt: write math as $...$ and $$...$$, never in code blocks; mermaid blocks draw as diagrams.",
+      "default": true
+    },
+    "packages": {
+      "type": "string",
+      "title": "Extra LaTeX packages",
+      "description": "TeX Live packages to load for every formula, separated by commas or spaces (such as \"physics, tensor\"). Built into the precompiled format; trusted as you give them.",
+      "default": ""
+    },
+    "macros": {
+      "type": "string",
+      "title": "Your LaTeX macros",
+      "description": "Your own definitions (\\newcommand, \\DeclareMathOperator, ...), one or more lines, available in every formula. Built into the precompiled format; trusted as you give them.",
+      "default": ""
+    },
+    "diagramColor": {
+      "type": "boolean",
+      "title": "Coloured diagrams",
+      "description": "Draw mermaid diagrams with Catppuccin accent colours for boxes and lines (Latte or Mocha, following the light or dark scheme). Off: the text colour alone.",
       "default": true
     }
   }
