@@ -8,7 +8,10 @@
 </div>
 
 <p align="center">
-  <img src="./docs/img/demo.png" alt="/inline-math demo in Ghostty inside tmux: inline and display formulas, Chinese text and a mermaid flowchart" width="1000" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/hero-dark.webp">
+    <img src="docs/img/hero-light.webp" alt="/inline-math demo and a reply with a formula and a training-loop flowchart, in Ghostty inside tmux" width="1000">
+  </picture>
 </p>
 
 > 💡 This is a Claude Code mod: a plugin with a hooks module that changes how replies are drawn in the terminal, nothing else. The stored conversation is never changed, so the model, `ctrl+o`, exports and copies still see the LaTeX and mermaid source.
