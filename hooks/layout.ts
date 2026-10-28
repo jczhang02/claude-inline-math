@@ -734,7 +734,7 @@ class TexReader {
       return name === 'xrightarrow' ? '→' : name === 'xleftarrow' ? '←' : name === 'xRightarrow' ? '⇒' : '⇐'
     }
     if (name === 'operatorname' || name === 'mathop') {
-      const text = TEXT_ARGUMENT.has(name) ? this.readRaw() : this.readArgument()
+      const text = TEXT_ARGUMENT.has(name) ? plainText(this.readRaw()) : this.readArgument()
       this.spaceNext = true
       return text
     }
@@ -745,7 +745,7 @@ class TexReader {
       return accent(this.readArgument(), ACCENTS[name], SPREAD_ACCENTS.has(name))
     }
     if (TEXT_ARGUMENT.has(name)) {
-      return this.readRaw()
+      return plainText(this.readRaw())
     }
     if (PLAIN_ARGUMENT.has(name)) {
       return this.readArgument()
@@ -804,6 +804,16 @@ class TexReader {
 }
 
 /** A readable one-line Unicode stand-in for a LaTeX formula. */
+// A text argument as read (`arg\,min`, `50\%`): its spacing commands as
+// spaces, escaped characters as themselves.
+function plainText(raw: string): string {
+  return raw
+    .replace(/\\(?:[,:;> ]|(?:q?quad|enspace|thinspace|medspace|thickspace)(?![A-Za-z]))/g, ' ')
+    .replace(/\\!/g, '')
+    .replace(/~/g, ' ')
+    .replace(/\\([{}%$&#_])/g, '$1')
+}
+
 export function toUnicode(latex: string): string {
   let out: string
   try {

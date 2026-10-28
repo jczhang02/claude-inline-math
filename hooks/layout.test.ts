@@ -135,6 +135,9 @@ describe('toUnicode', () => {
     ['\\color{red}{x} \\textcolor{blue}{y}', 'x y'],
     ['a \\pmod{n}', 'a (mod n)'],
     ['\\end{x} y', 'y'],
+    // Spacing inside a text argument reads as a space, not as its source.
+    ['\\operatorname*{arg\\,min}_x f(x)', 'arg minₓ f(x)'],
+    ['\\text{a~b\\quad c, 50\\%}', 'a b c, 50%'],
   ]
   for (const [latex, expected] of cases) {
     test(`${latex} reads ${expected}`, () => {
