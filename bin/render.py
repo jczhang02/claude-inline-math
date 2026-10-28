@@ -306,6 +306,11 @@ COMPAT_KATEX = r'''
 \newcommand\imsize[2]{\hbox{#1$\m@th#2$}}
 % What prepare() makes of commands it drops: their content alone.
 \newcommand\imcontent[1]{#1}
+% ulem's \sout underlines in math; KaTeX strikes through: a rule on the math axis.
+\@ifpackageloaded{ulem}{\let\im@textsout\sout
+  \protected\def\sout#1{\ifmmode\mathpalette\im@sout{#1}\else\im@textsout{#1}\fi}}{}
+\newcommand\im@sout[2]{\setbox\z@\hbox{$\m@th#1#2$}\rlap{\vrule\@width\wd\z@
+  \@height\dimexpr\fontdimen22\textfont2+.2\p@\relax\@depth-\dimexpr\fontdimen22\textfont2-.2\p@\relax}\box\z@}
 \makeatother
 '''
 
@@ -1566,11 +1571,27 @@ def preamble_text(have, user_packages=(), macros=''):
     lines += [rf'\usepackage{{{name}}}' for name in user_packages]
     lines += [r'\usepackage[active,tightpage]{preview}', rf'\setlength\PreviewBorder{{{PREVIEW_BORDER_PT}pt}}']
     if macros:
-        lines += [macros, r'\relax']  # \relax ends a definition the user left open-ended
+        # \relax ends a definition the user left open-ended.
+        lines += [user_first(macros), macros, r'\relax']
     if 'xcolor' in have:
         lines += [''.join(rf'\providecolor{{{name}}}{{HTML}}{{{rgb.upper()}}}' for name, rgb in CSS_COLOURS.items())]
     lines += [COMPAT, r'\pagestyle{empty}']
     return '\n'.join(lines) + '\n'
+
+
+# A command the user's macros define with \newcommand, \DeclareMathOperator
+# or \DeclarePairedDelimiter: the user's definition wins over a package's
+# (physics defines \Tr, \abs, \qty), where LaTeX would stop with "already
+# defined" and take the package out of the preamble.
+USER_DEFINES = re.compile(r'\\(?:newcommand|DeclareMathOperator|DeclarePairedDelimiter(?:XPP|X)?)'
+                          r'\s*\*?\s*\{?\s*(\\[A-Za-z]+)')
+
+
+def user_first(macros):
+    """\\let each command the user's macros define to \\relax, which LaTeX
+    takes as not defined."""
+    names = dict.fromkeys(USER_DEFINES.findall(macros))
+    return ''.join(rf'\let{name}\relax' for name in names)
 
 
 _which = {}

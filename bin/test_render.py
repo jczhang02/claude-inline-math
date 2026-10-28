@@ -672,6 +672,23 @@ class CompatTest(Case):
         one = self.render((r'\begin{array}{l|r} x & y \end{array}', False))['results'][0]
         self.assertGreater(max(self.ink_columns(one, range(one['rows'] * CH))), CH * 0.5)
 
+    def test_sout_strikes_through_in_math(self):
+        # ulem's \sout underlines in math mode; KaTeX draws a line through the middle.
+        for latex in (r'\sout{abc}', r'\text{\sout{abc}}'):
+            img = self.image(self.render((latex, False))['results'][0]).getchannel('A')
+            box = img.getbbox()
+            runs = []
+            for y in range(box[1], box[3]):
+                run = best = 0
+                for x in range(box[0], box[2]):
+                    run = run + 1 if img.getpixel((x, y)) > 128 else 0
+                    best = max(best, run)
+                runs.append(best)
+            line = box[1] + runs.index(max(runs))
+            height = box[3] - box[1]
+            self.assertGreater(max(runs), (box[2] - box[0]) * 0.8, latex)
+            self.assertLess(line, box[3] - height * 0.25, f'{latex}: the line is at the bottom, an underline')
+
     def test_ink_outside_the_box_is_kept(self):
         # A CD arrow's side labels sit outside the diagram's box: with them it is wider.
         labelled, bare = self.render((r'\begin{CD} A @>>> B \\ @VgVV @VVhV \\ C @>>> D \end{CD}', True),
@@ -856,7 +873,7 @@ class FormatTest(Case):
 
     def test_macros_that_break_the_preamble_are_left_out(self):
         self.fresh_formats()
-        broken = r'\newcommand\frac{x}'  # \frac exists: an error
+        broken = r'\renewcommand\nosuchcommandxyz{x}'  # nothing to renew: an error
         spy = Spy()
         with mock.patch.object(render.subprocess, 'run', spy):
             setup = render.tex_setup(render.parse_options({'cacheDir': self.tmp, 'macros': broken}))
@@ -897,6 +914,21 @@ class FormatTest(Case):
         self.assertFalse(any('left out' in p for p in setup.problems), setup.problems)
         results = self.render((r'\RR', False), (r'\abs{x}', False), (r'\norm{v}', False), **more)['results']
         self.assertTrue(all('png' in r for r in results), results)
+
+    def test_a_user_macro_wins_over_a_package_command_of_the_same_name(self):
+        # physics defines \Tr and \qty: LaTeX would stop with "already defined".
+        self.fresh_formats()
+        more = {'packages': ['physics'],
+                'macros': r'\DeclareMathOperator{\Tr}{Spur}\newcommand{\qty}{Q}\DeclarePairedDelimiter\abs{\lvert}{\rvert}'}
+        setup = render.tex_setup(render.parse_options(dict(more, cacheDir=self.tmp)))
+        self.assertFalse(any('left out' in p for p in setup.problems), setup.problems)
+        self.assertIn('{physics}', setup.preamble)
+        results = self.render((r'\Tr A', False), (r'\qty', False), (r'\abs{x}', False), (r'\pdv{f}{x}', False),
+                              **more)['results']
+        self.assertTrue(all('png' in r for r in results), results)
+        # The user's \Tr, not physics's: "Spur" is wider than "Tr".
+        plain = self.render((r'\operatorname{Tr} A', False), **more)['results'][0]
+        self.assertGreater(results[0]['columns'], plain['columns'])
 
     def test_a_package_that_breaks_the_preamble_is_left_out_alone(self):
         self.fresh_formats()
