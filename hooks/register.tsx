@@ -75,7 +75,7 @@ const SCAN_TRIGGER = /\$|\\[)\]]|```|~~~/
 const PROMPT_HINT = [
   '# Math and diagrams in replies',
   'This terminal typesets LaTeX: write $...$ inline (no space just inside the $) and $$...$$ on lines of their own for display.',
-  'It also draws ```mermaid blocks (flowchart, sequence, state, class, ER) as diagrams, but not ones with loops.',
+  'It also draws ```mermaid blocks (flowchart, sequence, state, class, ER) as diagrams.',
   'Never put math in code spans or code blocks.',
 ].join('\n')
 

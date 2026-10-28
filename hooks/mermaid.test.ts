@@ -93,6 +93,15 @@ function expectBoxesAligned(result: Drawn): number {
   return boxes
 }
 
+// The arrowheads of the drawing, by kind: "▼▼◄".
+function heads(result: Drawn): number {
+  return (textOf(result, 'edge').match(/[▲▼◄►]/g) ?? []).length
+}
+
+function count(result: Drawn, word: string): number {
+  return lines(result).join('\n').split(word).length - 1
+}
+
 function expectFits(result: Drawn, maxColumns: number): void {
   const widths = result.rows.map(rowWidth)
   expect(Math.max(...widths)).toBe(result.columns)
@@ -122,6 +131,163 @@ describe('isMermaidInfo', () => {
     expect(isMermaidInfo('mermaidjs')).toBe(false)
     expect(isMermaidInfo('ts mermaid')).toBe(false)
     expect(isMermaidInfo('')).toBe(false)
+  })
+})
+
+describe('loops', () => {
+  // The library routed every back edge like a forward one. Each edge now has
+  // its own arrowhead at its target and its label once, on its own route.
+  test('a retry in a left-right chart goes below the boxes', () => {
+    const result = drawn('flowchart LR\n  A[Start] --> B[Try]\n  B --> C{OK?}\n  C -->|yes| D[Done]\n  C -->|no| B')
+    const text = lines(result).join('\n')
+    expect(expectBoxesAligned(result)).toBeGreaterThanOrEqual(3)
+    expect(heads(result)).toBe(4)
+    expect(count(result, 'yes')).toBe(1)
+    expect(count(result, 'no')).toBe(1)
+    expect(text).toMatch(/Try ├─+►/)
+    expect(text).toMatch(/─yes►/)
+    // The back edge: out of the bottom of OK?, a label on it, up into Try.
+    const rows = lines(result)
+    const last = rows.findIndex(row => row.includes('no'))
+    expect(last).toBeGreaterThan(rows.findIndex(row => row.includes('Done')))
+    expect(rows[last - 1]).toContain('▲')
+    expect(textOf(result, 'edge')).toContain('└')
+  })
+
+  test('a retry in a top-down chart goes along the right side', () => {
+    const result = drawn('flowchart TD\n  A[Start] --> B[Try]\n  B --> C{OK?}\n  C -->|yes| D[Done]\n  C -->|no| B')
+    const text = lines(result).join('\n')
+    expect(expectBoxesAligned(result)).toBeGreaterThanOrEqual(3)
+    expect(count(result, '▼')).toBe(3)
+    expect(count(result, '◄')).toBe(1)
+    expect(text).toMatch(/Try +│ *◄─+┐/)
+    expect(text).toMatch(/OK\? +├─+┘/)
+    expect(count(result, 'no')).toBe(1)
+    expect(count(result, 'yes')).toBe(1)
+  })
+
+  test('a cycle of three: the way back runs outside the boxes', () => {
+    const result = drawn('graph TD\n  A --> B\n  B --> C\n  C --> A')
+    const text = lines(result).join('\n')
+    expect(expectBoxesAligned(result)).toBe(3)
+    expect(count(result, '▼')).toBe(2)
+    expect(count(result, '◄')).toBe(1)
+    expect(text).not.toContain('├│')
+    expect(text).toMatch(/A │◄┐/)
+    expect(text).toMatch(/C ├─┘/)
+    expect(heads(drawn('graph LR\n  A --> B\n  B --> C\n  C --> A'))).toBe(3)
+  })
+
+  test('a training loop with CJK labels', () => {
+    const result = drawn('flowchart TD\n  A[加载数据] --> B[前向传播]\n  B --> C[计算损失]\n  C --> D{收敛?}\n  D -->|否| B\n  D -->|是| E[保存模型]')
+    expect(expectBoxesAligned(result)).toBeGreaterThanOrEqual(3)
+    expect(count(result, '否')).toBe(1)
+    expect(count(result, '是')).toBe(1)
+    expect(count(result, '▼')).toBe(4)
+    expect(count(result, '◄')).toBe(1)
+    expectFits(result, 100)
+    const wide = drawn('flowchart LR\n  开始 --> 读取[读取 文件]\n  读取 --> 判断{成功?}\n  判断 -->|是| 完成\n  判断 -->|重试| 读取')
+    expect(count(wide, '重试')).toBe(1)
+    expect(count(wide, '是')).toBe(1)
+    expect(heads(wide)).toBe(4)
+    expect(expectBoxesAligned(wide)).toBe(3)
+  })
+
+  test('two nodes pointing at each other have two edges', () => {
+    for (const direction of ['TD', 'LR', 'BT']) {
+      const result = drawn(`flowchart ${direction}\n  Client -->|request| Server\n  Server -->|response| Client`)
+      expect(heads(result)).toBe(2)
+      expect(count(result, 'request')).toBe(1)
+      expect(count(result, 'response')).toBe(1)
+      if (direction !== 'BT') {
+        expect(expectBoxesAligned(result)).toBe(2)
+      }
+    }
+    const plain = drawn('flowchart TD\n  A --> B\n  B --> A')
+    expect(count(plain, '▼')).toBe(1)
+    expect(count(plain, '◄')).toBe(1)
+    const thick = drawn('flowchart TD\n  A -- 是 --> B\n  B ==> A')
+    expect(textOf(thick, 'edge')).toContain('━')
+    expect(count(thick, '是')).toBe(1)
+  })
+
+  test('a retry to the parent of a node that has a sibling', () => {
+    const result = drawn('flowchart TD; A-->B{Valid?}; B-->|Yes|C; B-->|No|D; D-->B')
+    expect(expectBoxesAligned(result)).toBeGreaterThanOrEqual(3)
+    expect(heads(result)).toBe(4)
+    expect(count(result, 'Yes')).toBe(1)
+    expect(count(result, 'No')).toBe(1)
+  })
+
+  test('connectors sit on the border of a box, never inside it', () => {
+    const result = drawn('flowchart TD; A-->B{Valid?}; B-->|Yes|C; B-->|No|D; D-->B', 78)
+    const rows = lines(result)
+    const diamond = rows.findIndex(row => row.includes('Valid?'))
+    expect(rows[diamond]).not.toMatch(/│[^│◄]*[┬┴]/)
+    expect(rows[diamond + 1]).toMatch(/^◇─+┬─+◇( |$)/)
+    expect(count(result, 'Yes')).toBe(1)
+    expect(count(result, 'No')).toBe(1)
+    // The same for a labelled fork under a rectangle.
+    const fork = lines(drawn('flowchart TD\n  A[Check] -->|ok| B[Go]\n  A -->|bad| C[Stop]\n  C --> A', 78)).join('\n')
+    expect(fork).not.toMatch(/│[^│\n]*[┬┴]+[^│\n]*│/)
+  })
+
+  test('a self loop is a small loop on the side of its box', () => {
+    const down = drawn('flowchart TD\n  A --> A\n  A --> B')
+    expect(expectBoxesAligned(down)).toBe(2)
+    expect(lines(down).join('\n')).toMatch(/│ *├─┐\n.*\n.*│◄┘/)
+    expect(heads(down)).toBe(2)
+    const across = drawn('flowchart LR\n  A -->|retry| A\n  A --> B')
+    expect(expectBoxesAligned(across)).toBe(2)
+    expect(lines(across).join('\n')).toMatch(/└┬/)
+    expect(count(across, 'retry')).toBe(1)
+    expect(textOf(across, 'edge')).toContain('▲')
+    const cjk = drawn('flowchart TD\n  A[任务] -->|重试| A\n  A --> B[完成]')
+    expect(count(cjk, '重试')).toBe(1)
+    expect(expectBoxesAligned(cjk)).toBe(2)
+  })
+
+  test('state diagrams: a transition back keeps both labels', () => {
+    const result = drawn('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running: start\n  Running --> Idle: stop\n  Running --> [*]')
+    expect(count(result, 'start')).toBe(1)
+    expect(count(result, 'stop')).toBe(1)
+    expect(count(result, '◄')).toBe(1)
+    expect(count(result, '▼')).toBeGreaterThanOrEqual(2)
+    const own = drawn('stateDiagram-v2\n  [*] --> A\n  A --> A: 自环\n  A --> B')
+    expect(count(own, '自环')).toBe(1)
+    expect(count(own, '◄')).toBe(1)
+  })
+
+  test('two retries into one node share its arrowhead', () => {
+    const result = drawn('flowchart TD\n  A --> B\n  B --> C\n  C --> D\n  D -->|x| B\n  C -->|y| B')
+    expect(count(result, '◄')).toBe(1)
+    expect(count(result, 'x')).toBe(1)
+    expect(count(result, 'y')).toBe(1)
+    expect(expectBoxesAligned(result)).toBe(4)
+  })
+
+  test('a loop inside a subgraph stays inside its box', () => {
+    const result = drawn('flowchart TD\n  subgraph S\n    B --> C\n    C --> B\n  end\n  A --> B')
+    expect(expectBoxesAligned(result)).toBe(4)
+    expect(count(result, '◄')).toBe(1)
+    const sideways = drawn('flowchart TD\n  subgraph S\n    direction LR\n    B --> C\n    C --> B\n  end')
+    const rows = lines(sideways)
+    expect(rows[rows.length - 1]).toMatch(/^└─+┘$/)
+    expect(rows[rows.length - 2]).toMatch(/└─+┘ *│$/)
+  })
+
+  test('what the layout cannot keep apart is refused, not shown wrong', () => {
+    const lost = 'dropped or cut an edge'
+    // A loop into a subgraph from outside.
+    expect(refused('flowchart TD\n  subgraph S\n    B --> C\n  end\n  A --> B\n  C --> A')).toContain('failed')
+    // Two edges that would run on one line (the same layer, both ways).
+    expect(refused('flowchart TD\n  A --> B\n  A --> C\n  B --> C\n  C --> B')).toContain(lost)
+    // A node that a retry leaves and another retry enters: one side, two roles.
+    expect(refused('flowchart TD\n  A --> B\n  B --> C\n  C --> B\n  B --> A')).toContain(lost)
+    // A self loop on a node with a loop of its own.
+    expect(refused('flowchart TD\n  A --> B\n  B --> A\n  A --> A')).toContain(lost)
+    // Two self loops on one node.
+    expect(refused('flowchart TD\n  A --> A\n  A -->|again| A')).toContain(lost)
   })
 })
 
@@ -157,21 +323,8 @@ describe('flowcharts', () => {
     expect(text.split('开始')).toHaveLength(2)
   })
 
-  test('a diagram with a loop is refused before its layout, not shown wrong', () => {
-    // The library draws every back edge wrongly: over another edge, with its
-    // label moved, without heads, or through a box.
-    const loop = 'has a loop'
-    expect(refused('flowchart TD\n  开始 --> 检查{检查}\n  检查 -- 是 --> 结束\n  检查-->|否|开始')).toContain(loop)
-    expect(refused('flowchart LR\n  A[公式 formula] --> B{closed?}\n  B -->|yes| C[picture]\n  B -->|no| A', 75)).toContain(loop)
-    expect(refused('flowchart TD; A-->B{Valid?}; B-->|Yes|C; B-->|No|D; D-->B')).toContain(loop)
-    expect(refused('flowchart TD\n  A[加载数据] --> B[前向传播]\n  B --> C[计算损失]\n  C --> D{收敛?}\n  D -->|否| B\n  D -->|是| E[保存模型]')).toContain(loop)
-    expect(refused('graph LR\n  A --> B\n  B --> C\n  C --> A')).toContain(loop)
-    expect(refused('flowchart TD\n  A --> A\n  A --> B')).toContain(loop)
-    expect(refused('flowchart LR\n  Client -->|request| Server\n  Server -->|response| Client')).toContain(loop)
-    expect(refused('flowchart TD\n  A -- 是 --> B\n  B ==> A')).toContain(loop)
-    expect(refused('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running: start\n  Running --> Idle: stop\n  Running --> [*]')).toContain(loop)
-    // Lines without a direction, a two-way arrow and [*] at both ends are no loop.
-    drawn('flowchart TD\n  A -- yes --> B\n  B -.-> C\n  C --- A')
+  test('lines without a direction, a two-way arrow and [*] at both ends are no loop', () => {
+    expect(heads(drawn('flowchart TD\n  A -- yes --> B\n  B -.-> C\n  C --- A'))).toBe(2)
     drawn('flowchart LR\n  A <--> B\n  B --> C')
     drawn('stateDiagram-v2\n  [*] --> A\n  A --> B\n  B --> [*]')
   })
@@ -191,6 +344,9 @@ describe('flowcharts', () => {
     for (const width of [60, 75, 95, 120]) {
       const text = lines(drawn(source, width)).join('\n')
       expect(text.match(/[►▼◄▲]/g)).toHaveLength(3)
+      // The edges leave the diamond's side, not one cell off it.
+      expect(text).toMatch(/formula\? +├─+yes─*►/)
+      expect(text).not.toMatch(/formula\? +│ +├/)
       for (const word of ['回复 reply', 'formula?', 'picture', 'text', 'yes', 'no']) {
         expect(text).toContain(word)
       }
@@ -365,9 +521,10 @@ describe('refusals', () => {
   })
 
   test('a crash inside the library is a refusal, not an exception', () => {
-    // beautiful-mermaid 1.1.3 can't lay out a cycle that enters a subgraph;
-    // the loop check now refuses it before the library sees it.
-    expect(refused('flowchart TD\n  subgraph S\n    x --> y\n  end\n  y --> z\n  z --> x')).toContain('has a loop')
+    // beautiful-mermaid 1.1.3 can't lay out a cycle that enters a subgraph
+    // (no node is left to start from); its TypeError is caught.
+    expect(refused('flowchart TD\n  subgraph S\n    x --> y\n  end\n  y --> z\n  z --> x')).toBe('diagram renderer failed on this diagram')
+    expect(refused('flowchart LR\n  subgraph S\n    B --> C\n  end\n  A --> B\n  C --> A')).toBe('diagram renderer failed on this diagram')
   })
 
   test('too wide', () => {

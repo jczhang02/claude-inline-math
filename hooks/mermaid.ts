@@ -17,7 +17,7 @@
 // resize does not draw a diagram that cannot fit again.
 
 import { stringWidth } from './layout'
-import { renderMermaidASCII } from './vendor/mermaid-ascii.js'
+import { layoutReport, renderMermaidASCII, type AsciiLayoutReport } from './vendor/mermaid-ascii.js'
 
 export type DiagramRole = 'text' | 'border' | 'edge' | 'label' | 'dim'
 export type DiagramSegment = { text: string; role: DiagramRole }
@@ -512,7 +512,7 @@ function segments(row: Cell[]): DiagramSegment[] {
   return out
 }
 
-type Art = { rows: DiagramSegment[][]; columns: number } | { reason: string }
+type Art = { rows: DiagramSegment[][]; columns: number; report: AsciiLayoutReport | null } | { reason: string }
 
 // The library's own refusals are plain Errors; a TypeError or RangeError is
 // a bug of its layout (a cycle into a subgraph, for one), not of the source.
@@ -528,8 +528,10 @@ function shortError(error: unknown, glyphs: Glyph[]): string {
 
 function art(encoded: Encoded, kind: Kind, paddingX: number): Art {
   let drawn: string
+  let report: AsciiLayoutReport | null
   try {
     drawn = renderMermaidASCII(encoded.text, { useAscii: false, colorMode: 'truecolor', theme: PROBE, paddingX, paddingY: 1 })
+    report = layoutReport()
   } catch (error) {
     return { reason: shortError(error, encoded.glyphs) }
   }
@@ -551,7 +553,7 @@ function art(encoded: Encoded, kind: Kind, paddingX: number): Art {
   const indent = Math.min(...rows.map(row => row.findIndex(cell => cell.text !== ' ')))
   const columns = Math.max(...rows.map(row => row.slice(indent).reduce((sum, cell) => sum + cell.width, 0)))
 
-  return { rows: rows.map(row => segments(row.slice(indent))), columns }
+  return { rows: rows.map(row => segments(row.slice(indent))), columns, report }
 }
 
 // ---------------------------------------------------------------------------
@@ -593,97 +595,18 @@ function countNodes(prepared: string): { all: number; inSubgraphs: number } {
   return { all: all.size, inSubgraphs: nested.size }
 }
 
-// The directed edges of a prepared flowchart (`-->`, `==>`, `-.->`; `A & B`
-// on either side) or state diagram (`X --> Y`, `[*]` left out).
-function edges(prepared: string, kind: Kind): [string, string][] {
-  const found: [string, string][] = []
-  for (const statement of prepared.split('\n').slice(1)) {
-    if (kind === 'state') {
-      const match = /^\s*([^\s:]+)\s*-->\s*([^\s:]+)/.exec(statement)
-      if (match && match[1] !== '[*]' && match[2] !== '[*]') {
-        found.push([match[1] as string, match[2] as string])
-      }
-      continue
-    }
-    if (FLOW_KEYWORD.test(statement)) {
-      continue
-    }
-    // As in countNodes: labels, edge text and shapes go, leaving ids and arrows.
-    let bare = statement.replace(/"[^"]*"/g, '').replace(/\|[^|]*\|/g, '').replace(/:::[\w-]+/g, '')
-    bare = bare.replace(/ (?:--|==|-\.) .*? (<?-->|<?==>|<?-\.->|---|===|-\.-)(?= |$)/g, ' $1')
-    for (let before = ''; before !== bare; ) {
-      before = bare
-      bare = bare.replace(/\[[^[\]]*\]|\([^()]*\)|\{[^{}]*\}|(?<=\w)>[^\]]*\]/g, '')
-    }
-    const parts = bare.split(/\s*(<?-->|<?==>|<?-\.->|---|===|-\.-)\s*/)
-    const ids = (part: string) => part.match(/(?<![\w-])[A-Za-z_][\w]*(?:-[\w]+)*/g) ?? []
-    for (let i = 1; i + 1 < parts.length; i += 2) {
-      if (['-->', '==>', '-.->'].includes(parts[i] as string)) {
-        for (const from of ids(parts[i - 1] as string)) {
-          for (const to of ids(parts[i + 1] as string)) {
-            found.push([from, to])
-          }
-        }
-      }
-    }
-  }
-
-  return found
-}
-
-/**
- * Does the diagram have a loop (a retry, a training loop, A --> A)? The
- * library draws every back edge wrongly: over another edge, with its label
- * on the wrong edge, without arrowheads, or through a box.
- */
-function hasLoop(prepared: string, kind: Kind): boolean {
-  const next = new Map<string, string[]>()
-  for (const [from, to] of edges(prepared, kind)) {
-    next.set(from, [...(next.get(from) ?? []), to])
-  }
-  const state = new Map<string, 'open' | 'done'>()
-  const visit = (node: string): boolean => {
-    state.set(node, 'open')
-    for (const to of next.get(node) ?? []) {
-      if (state.get(to) === 'open' || (!state.has(to) && visit(to))) {
-        return true
-      }
-    }
-    state.set(node, 'done')
-    return false
-  }
-
-  return [...next.keys()].some(node => !state.has(node) && visit(node))
-}
-
 const HEADS = /[▲▼◄►◥◤◢◣]/g
 
-// The distinct nodes that edges with a head point at (after `-->`, `==>`,
-// `-.->`; `A & B` both): the drawing needs at least one head for each.
-function targets(prepared: string): number {
-  const found = new Set<string>()
-  for (const statement of prepared.split('\n').slice(1)) {
-    if (FLOW_KEYWORD.test(statement)) {
-      continue
-    }
-    const bare = statement.replace(/"[^"]*"/g, '""')
-    for (const match of bare.matchAll(/(?:-->|==>|-\.->)(?:\|[^|]*\|)?\s*((?:[\w-]+\s*&\s*)*[\w-]+)/g)) {
-      for (const id of (match[1] as string).split('&')) {
-        found.add(id.trim())
-      }
-    }
-  }
-
-  return found.size
-}
-
 /**
- * Did the library drop or cut an edge? (It draws a back edge of a left-right
- * loop over another edge, and an edge leaving the bottom row of its canvas
- * is cut off.) Too few arrowheads for the nodes they point at, or a line
- * that leaves the drawing's outer edge.
+ * Did the library drop or cut an edge? It reports the edges it could not
+ * route (a loop that would run over another edge or a connector) and how many
+ * arrowheads and labels it meant to draw; the rows must show them all. A line
+ * that leaves the drawing's outer edge was cut off too.
  */
-function lostEdge(prepared: string, rows: DiagramSegment[][]): boolean {
+function lostEdge(report: AsciiLayoutReport | null, rows: DiagramSegment[][], glyphs: Glyph[]): boolean {
+  if (!report || report.dropped > 0) {
+    return true
+  }
   let heads = 0
   for (const row of rows) {
     for (const segment of row) {
@@ -692,15 +615,100 @@ function lostEdge(prepared: string, rows: DiagramSegment[][]): boolean {
       }
     }
   }
-  if (heads < targets(prepared)) {
+  if (heads < report.heads) {
     return true
+  }
+  // A label is drawn once for each edge that has it; a node with the same
+  // text only makes this check lenient. A label that lost a letter to
+  // another label or to a connector is not found.
+  const text = rows.map(row => row.map(segment => segment.text).join('')).join('\n')
+  const wanted = new Map<string, number>()
+  for (const label of report.labels) {
+    for (const line of decodeText(label, glyphs).split('\n')) {
+      wanted.set(line, (wanted.get(line) ?? 0) + 1)
+    }
+  }
+  for (const [line, count] of wanted) {
+    if (line !== '' && text.split(line).length - 1 < count) {
+      return true
+    }
   }
   // Nothing is drawn above the first row or below the last: a line that
   // leaves the canvas there (a box's ┴ or ┬ connector) was cut off.
   const first = rows[0]?.map(segment => segment.text).join('') ?? ''
   const last = rows[rows.length - 1]?.map(segment => segment.text).join('') ?? ''
 
-  return first.includes('┴') || last.includes('┬')
+  return first.includes('┴') || last.includes('┬') || misplacedLine(rows)
+}
+
+type GridCell = { text: string; role: DiagramRole }
+
+// The drawing as terminal cells: a wide character fills its cell and leaves
+// the next one empty.
+function gridOf(rows: DiagramSegment[][]): GridCell[][] {
+  return rows.map(row => {
+    const out: GridCell[] = []
+    for (const segment of row) {
+      for (const char of segment.text) {
+        out.push({ text: char, role: segment.role })
+        if (stringWidth(char) === 2) {
+          out.push({ text: '', role: segment.role })
+        }
+      }
+    }
+
+    return out
+  })
+}
+
+/**
+ * Is a line or connector where it can not be? A box's outline with
+ * something drawn strictly inside it (a connector put one cell too far in),
+ * or a side connector (├ ┤) with no line above or below it, or a top or
+ * bottom one (┬ ┴) with none beside it (an edge that starts one cell off
+ * its box). Boxes that hold other boxes (subgraphs) are not looked into.
+ */
+function misplacedLine(rows: DiagramSegment[][]): boolean {
+  const grid = gridOf(rows)
+  const at = (r: number, c: number): string => grid[r]?.[c]?.text ?? ' '
+  // A cell of a box outline or an edge: a line, box-drawing or shape character.
+  const drawn = (r: number, c: number): boolean => /[\u2500-\u257f\u25a0-\u25ff\u2310-\u231f]/.test(at(r, c))
+  for (const [r, row] of grid.entries()) {
+    for (const [c, cell] of row.entries()) {
+      if (cell.role !== 'border' && cell.role !== 'edge') {
+        continue
+      }
+      if ('├┤'.includes(cell.text) && !drawn(r - 1, c) && !drawn(r + 1, c)) {
+        return true
+      }
+      if ('┬┴'.includes(cell.text) && !drawn(r, c - 1) && !drawn(r, c + 1)) {
+        return true
+      }
+      if (!'┌╭◇'.includes(cell.text)) {
+        continue
+      }
+      let right = c + 1
+      while (right < row.length && !'┐╮◇'.includes(at(r, right)) && !'┌╭'.includes(at(r, right))) {
+        right++
+      }
+      let bottom = r + 1
+      while (bottom < grid.length && at(bottom, c) !== '' && !'└╰◇'.includes(at(bottom, c)) && !'┌╭'.includes(at(bottom, c)) && '│├┤┼┬┴'.includes(at(bottom, c))) {
+        bottom++
+      }
+      if (!'┐╮◇'.includes(at(r, right)) || !'└╰◇'.includes(at(bottom, c)) || !'┘╯◇'.includes(at(bottom, right))) {
+        continue
+      }
+      const inside = grid.slice(r + 1, bottom).flatMap(line => line.slice(c + 1, right))
+      if (inside.some(inner => '┌╭◇'.includes(inner.text))) {
+        continue
+      }
+      if (inside.some(inner => (inner.role === 'border' || inner.role === 'edge') && inner.text !== ' ')) {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 type Drawn = { result: DiagramResult; always?: boolean; narrowest?: number; below?: number }
@@ -726,9 +734,6 @@ function draw(source: string, maxColumns: number): Drawn {
     return fail(`${word.slice(0, 40)} diagrams are not supported`, true)
   }
   const prepared = prepare(lines, kind)
-  if ((kind === 'flowchart' || kind === 'state') && hasLoop(prepared, kind)) {
-    return fail('diagram has a loop, which the text renderer cannot draw', true)
-  }
   if (kind === 'flowchart') {
     const nodes = countNodes(prepared)
     if (nodes.all > MAX_NODES) {
@@ -771,7 +776,7 @@ function draw(source: string, maxColumns: number): Drawn {
         tallest = tallest === 0 ? found.rows.length : Math.min(tallest, found.rows.length)
       } else if (found.columns > maxColumns) {
         narrowest = Math.min(narrowest, found.columns)
-      } else if (kind === 'flowchart' && lostEdge(variant, found.rows)) {
+      } else if ((kind === 'flowchart' || kind === 'state') && lostEdge(found.report, found.rows, encoded.glyphs)) {
         isLost = true
       } else {
         return { result: { ok: true, rows: found.rows, columns: found.columns } }

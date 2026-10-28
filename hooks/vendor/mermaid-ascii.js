@@ -1174,7 +1174,7 @@ function isFreeInGrid(grid, c) {
   return !grid.has(gridKey(c));
 }
 var gridExtents = new WeakMap;
-function getPath(grid, from, to) {
+function getPath(grid, from, to, loopGraph) {
   /* inline-math patch 2: refuse non-finite ends, search only near the drawing */
   if (!Number.isFinite(from.x + from.y + to.x + to.y)) {
     throw new Error("diagram layout failed");
@@ -1217,8 +1217,11 @@ function getPath(grid, from, to) {
       if (!isFreeInGrid(grid, next) && !gridCoordEquals(next, to)) {
         continue;
       }
-      const newCost = currentCost + 1;
       const nextKey = gridKey(next);
+      if (loopGraph && next.x % 4 !== 3 && next.y % 4 !== 3 && !((loopGraph.columnWidth.get(next.x) ?? 0) > 0 && (loopGraph.rowHeight.get(next.y) ?? 0) > 0)) {
+        continue; /* inline-math patch 6: a loop keeps to the gaps and to columns and rows that have a size */
+      }
+      const newCost = currentCost + 1 + (loopGraph && loopGraph.claimed.has(nextKey) ? 20 : 0); /* inline-math patch 6: a cell of another edge costs more */
       const existingCost = costSoFar.get(nextKey);
       if (existingCost === undefined || newCost < existingCost) {
         costSoFar.set(nextKey, newCost);
@@ -1372,10 +1375,205 @@ function determineStartAndEndDir(edge, graphDirection) {
   }
   return [preferredDir, preferredOppositeDir, alternativeDir, alternativeOppositeDir];
 }
-function determinePath(graph, edge) {
+/* inline-math patch 6: back edges and self loops */
+var layoutReportValue = null;
+function layoutReport() {
+  return layoutReportValue;
+}
+function edgeLayoutDirection(graph, edge) {
   const sourceSg = getNodeSubgraph(graph, edge.from);
   const targetSg = getNodeSubgraph(graph, edge.to);
-  const effectiveDir = sourceSg && sourceSg === targetSg && sourceSg.direction ? sourceSg.direction : graph.config.graphDirection;
+  return sourceSg && sourceSg === targetSg && sourceSg.direction ? sourceSg.direction : graph.config.graphDirection;
+}
+function isBackEdge(graph, edge) {
+  if (edge.from === edge.to || !edge.from.gridCoord || !edge.to.gridCoord)
+    return false;
+  const from = edge.from.gridCoord;
+  const to = edge.to.gridCoord;
+  return edgeLayoutDirection(graph, edge) === "LR" ? to.x < from.x : to.y < from.y;
+}
+function pathCells(path) {
+  const cells = [];
+  for (let i = 0;i < path.length; i++) {
+    const a = path[i];
+    cells.push(a);
+    const b = path[i + 1];
+    if (b && (a.x === b.x) !== (a.y === b.y)) {
+      const stepX = Math.sign(b.x - a.x);
+      const stepY = Math.sign(b.y - a.y);
+      for (let c = { x: a.x + stepX, y: a.y + stepY };c.x !== b.x || c.y !== b.y; c = { x: c.x + stepX, y: c.y + stepY }) {
+        cells.push(c);
+      }
+    }
+  }
+  return cells;
+}
+function claimPath(graph, path) {
+  for (const c of pathCells(path)) {
+    graph.claimed.set(gridKey(c), true);
+  }
+}
+function routeBackEdge(graph, edge, dir) {
+  const side = dir === "LR" ? Down : Right;
+  const outward = { x: side.x - 1, y: side.y - 1 };
+  const from = gridCoordDirection(edge.from.gridCoord, side);
+  const to = gridCoordDirection(edge.to.gridCoord, side);
+  const first = { x: from.x + outward.x, y: from.y + outward.y };
+  const last = { x: to.x + outward.x, y: to.y + outward.y };
+  edge.isBack = true;
+  edge.startDir = side;
+  edge.endDir = side;
+  const leaves = `out ${edge.from.name}`;
+  const enters = `in ${edge.to.name}`;
+  const usable = (c, tag) => !graph.claimed.has(gridKey(c)) || graph.claimedEnds.get(gridKey(c)) === tag;
+  if (!usable(first, leaves) || !usable(last, enters)) {
+    edge.path = [];
+    return;
+  }
+  const inner = getPath(graph.grid, first, last, graph);
+  if (inner === null) {
+    edge.path = [];
+    return;
+  }
+  edge.path = mergePath([from, ...inner, to]);
+  for (const c of edge.path.slice(1, -1)) {
+    if (c.x % 4 === 3) {
+      graph.columnWidth.set(c.x, Math.max(graph.columnWidth.get(c.x) ?? 0, 3));
+    }
+    if (c.y % 4 === 3) {
+      graph.rowHeight.set(c.y, Math.max(graph.rowHeight.get(c.y) ?? 0, 3));
+    }
+  }
+  claimPath(graph, edge.path);
+  graph.claimedEnds.set(gridKey(first), leaves);
+  graph.claimedEnds.set(gridKey(last), enters);
+}
+function reserveSelfLoop(graph, edge) {
+  const gc = edge.from.gridCoord;
+  edge.path = [];
+  edge.isSelfLoop = true;
+  edge.startDir = Middle;
+  edge.endDir = Middle;
+  const width = edge.text.length > 0 ? maxLineWidth(edge.text) : 0;
+  const lines = edge.text.length > 0 ? lineCount(edge.text) : 0;
+  if (edgeLayoutDirection(graph, edge) === "LR") {
+    graph.rowHeight.set(gc.y + 3, Math.max(graph.rowHeight.get(gc.y + 3) ?? 0, 3 + lines));
+  } else {
+    graph.columnWidth.set(gc.x + 3, Math.max(graph.columnWidth.get(gc.x + 3) ?? 0, width > 0 ? width + 4 : 3));
+  }
+}
+function routeLoops(graph, loops) {
+  graph.claimed = new Map;
+  graph.claimedEnds = new Map;
+  for (const edge of graph.edges) {
+    claimPath(graph, edge.path);
+  }
+  const span = (e) => Math.abs(e.from.gridCoord.x - e.to.gridCoord.x) + Math.abs(e.from.gridCoord.y - e.to.gridCoord.y);
+  loops.sort((a, b) => span(a) - span(b));
+  const touching = (node) => loops.filter((e) => e.from === node || e.to === node);
+  const selfLooped = new Set;
+  for (const edge of loops) {
+    if (edge.from === edge.to) {
+      const node = edge.from;
+      const side = edgeLayoutDirection(graph, edge) === "LR" ? Down : Right;
+      const crowded = selfLooped.has(node) || touching(node).some((e) => e.from !== e.to) || graph.edges.some((e) => !e.isBack && e.path.length > 0 && (e.from === node && dirEquals(e.startDir, side) || e.to === node && dirEquals(e.endDir, side)));
+      if (!crowded) {
+        selfLooped.add(node);
+        reserveSelfLoop(graph, edge);
+      }
+    } else if (![...touching(edge.from), ...touching(edge.to)].some((e) => e.from === e.to)) {
+      determinePath(graph, edge);
+    }
+    increaseGridSizeForPath(graph, edge.path);
+    determineLabelLine(graph, edge);
+  }
+}
+function loopBounds(graph, edge) {
+  const labelWidth = edge.text.length > 0 ? maxLineWidth(edge.text) : 0;
+  const labelLines = edge.text.length > 0 ? lineCount(edge.text) : 0;
+  if (edge.isSelfLoop) {
+    const x0 = edge.from.drawingCoord.x;
+    const y0 = edge.from.drawingCoord.y;
+    const width = edge.from.drawing.length;
+    const height = edge.from.drawing[0].length;
+    if (edgeLayoutDirection(graph, edge) === "LR") {
+      const middle = x0 + Math.floor((width - 1) / 2);
+      return { minX: Math.min(x0, middle - Math.floor(labelWidth / 2)), maxX: Math.max(x0 + width - 1, middle + Math.ceil(labelWidth / 2)), minY: y0, maxY: y0 + height + 1 + labelLines };
+    }
+    return { minX: x0, maxX: x0 + width + 1 + (labelWidth > 0 ? labelWidth + 1 : 0), minY: y0, maxY: y0 + height - 1 };
+  }
+  if (!edge.isBack || edge.path.length < 2)
+    return null;
+  const points = lineToDrawing(graph, edge.path);
+  const half = Math.ceil(labelWidth / 2);
+  return {
+    minX: Math.min(...points.map((p) => p.x)) - half,
+    maxX: Math.max(...points.map((p) => p.x)) + half,
+    minY: Math.min(...points.map((p) => p.y)) - labelLines,
+    maxY: Math.max(...points.map((p) => p.y)) + labelLines
+  };
+}
+function dropLoopsAcrossSubgraphs(graph) {
+  for (const edge of graph.edges) {
+    if (!edge.isBack && !edge.isSelfLoop)
+      continue;
+    const parts = [];
+    if (edge.isBack && edge.path.length >= 2) {
+      const points = lineToDrawing(graph, edge.path);
+      for (let i = 1;i < points.length; i++) {
+        parts.push({ minX: Math.min(points[i - 1].x, points[i].x), maxX: Math.max(points[i - 1].x, points[i].x), minY: Math.min(points[i - 1].y, points[i].y), maxY: Math.max(points[i - 1].y, points[i].y) });
+      }
+    } else if (edge.isSelfLoop) {
+      parts.push(loopBounds(graph, edge));
+    }
+    const crosses = graph.subgraphs.some((sg) => sg.nodes.length > 0 && !(sg.nodes.includes(edge.from) && sg.nodes.includes(edge.to)) && parts.some((r) => r.minX <= sg.maxX && r.maxX >= sg.minX && r.minY <= sg.maxY && r.maxY >= sg.minY));
+    if (crosses) {
+      edge.path = [];
+      edge.isBack = false;
+      edge.isSelfLoop = false;
+    }
+  }
+}
+function dropOverlaps(graph) {
+  const seen = new Set;
+  for (const edge of graph.edges) {
+    if (edge.path.length < 2 || edge.bundle)
+      continue;
+    const key = pathCells(edge.path).map(gridKey).sort().join(";");
+    if (seen.has(key)) {
+      edge.path = [];
+    } else {
+      seen.add(key);
+    }
+  }
+}
+function buildLayoutReport(graph) {
+  const heads = new Set;
+  const labels = [];
+  let dropped = 0;
+  for (const edge of graph.edges) {
+    if (edge.path.length === 0 && !edge.isSelfLoop) {
+      dropped++;
+      continue;
+    }
+    if (edge.hasArrowEnd) {
+      heads.add(edge.isSelfLoop ? `self ${edge.from.name}` : `end ${gridKey(edge.path[edge.path.length - 1])}`);
+    }
+    if (edge.hasArrowStart) {
+      heads.add(edge.isSelfLoop ? `self ${edge.from.name}` : `start ${gridKey(edge.path[0])}`);
+    }
+    if (edge.text.length > 0) {
+      labels.push(edge.text);
+    }
+  }
+  return { dropped, heads: heads.size, labels };
+}
+function determinePath(graph, edge) {
+  const effectiveDir = edgeLayoutDirection(graph, edge);
+  if (isBackEdge(graph, edge)) {
+    routeBackEdge(graph, edge, effectiveDir);
+    return;
+  }
   const [preferredDir, preferredOppositeDir, alternativeDir, alternativeOppositeDir] = determineStartAndEndDir(edge, effectiveDir);
   const prefFrom = gridCoordDirection(edge.from.gridCoord, preferredDir);
   const prefTo = gridCoordDirection(edge.to.gridCoord, preferredOppositeDir);
@@ -1386,7 +1584,12 @@ function determinePath(graph, edge) {
   if (preferredPath !== null && alternativePath !== null) {
     preferredPath = mergePath(preferredPath);
     alternativePath = mergePath(alternativePath);
-    if (preferredPath.length <= alternativePath.length) {
+    /* inline-math patch 6: a forward edge keeps off the side a loop of its node uses */
+    const side = effectiveDir === "LR" ? Down : Right;
+    const clashes = (start, end) => graph.loopNodes?.has(edge.from) && dirEquals(start, side) || graph.loopNodes?.has(edge.to) && dirEquals(end, side);
+    const preferredClashes = clashes(preferredDir, preferredOppositeDir);
+    const alternativeClashes = clashes(alternativeDir, alternativeOppositeDir);
+    if (preferredClashes === alternativeClashes ? preferredPath.length <= alternativePath.length : alternativeClashes) {
       edge.startDir = preferredDir;
       edge.endDir = preferredOppositeDir;
       edge.path = preferredPath;
@@ -1394,6 +1597,7 @@ function determinePath(graph, edge) {
       edge.startDir = alternativeDir;
       edge.endDir = alternativeOppositeDir;
       edge.path = alternativePath;
+      edge.legLabel = preferredClashes && !alternativeClashes; /* inline-math patch 6 */
     }
     return;
   }
@@ -1414,7 +1618,7 @@ function determinePath(graph, edge) {
   edge.path = [prefFrom, prefTo];
 }
 function determineLabelLine(graph, edge) {
-  if (edge.text.length === 0)
+  if (edge.text.length === 0 || edge.path.length < 2)
     return;
   const lenLabel = edge.text.length;
   const pathLen = edge.path.length;
@@ -1430,7 +1634,30 @@ function determineLabelLine(graph, edge) {
   }
   const suitableSegments = segments.filter((s) => s.width >= lenLabel && s.index > 1);
   let largestLine;
-  if (suitableSegments.length > 0) {
+  if (edge.isBack || edge.legLabel) {
+    /* inline-math patch 6: a back edge's label goes on its long middle leg */
+    const legs = segments.length >= 3 ? segments.slice(1, -1) : segments;
+    const length = (s) => Math.abs(s.line[0].x - s.line[1].x) + Math.abs(s.line[0].y - s.line[1].y);
+    /* A run along the gaps is labelled over the widest column between its ends that is a gap or a box's
+       inside; a box's border column is not widened (its edges would come off the box). */
+    const columns = (s) => {
+      const left = Math.min(s.line[0].x, s.line[1].x);
+      const right = Math.max(s.line[0].x, s.line[1].x);
+      return s.line[0].y === s.line[1].y ? Array.from({ length: Math.max(0, right - left - 1) }, (_, i) => left + 1 + i).filter((x) => x % 2 === 1) : [s.line[0].x];
+    };
+    const fitting = legs.filter((s) => columns(s).length > 0);
+    const leg = (fitting.length > 0 ? fitting : legs).reduce((best, s) => length(s) > length(best) ? s : best);
+    largestLine = leg.line;
+    if (largestLine[0].y === largestLine[1].y) {
+      let column = columns(leg)[0] ?? Math.min(largestLine[0].x, largestLine[1].x) + 1;
+      for (const x of columns(leg)) {
+        if ((graph.columnWidth.get(x) ?? 0) > (graph.columnWidth.get(column) ?? 0)) {
+          column = x;
+        }
+      }
+      largestLine = [{ x: column, y: largestLine[0].y }, { x: column, y: largestLine[0].y }];
+    }
+  } else if (suitableSegments.length > 0) {
     suitableSegments.sort((a, b) => b.index - a.index);
     largestLine = suitableSegments[0].line;
   } else {
@@ -1446,8 +1673,9 @@ function determineLabelLine(graph, edge) {
   const minX = Math.min(largestLine[0].x, largestLine[1].x);
   const maxX = Math.max(largestLine[0].x, largestLine[1].x);
   const middleX = minX + Math.floor((maxX - minX) / 2);
-  const current = graph.columnWidth.get(middleX) ?? 0;
-  graph.columnWidth.set(middleX, Math.max(current, lenLabel + 2));
+  const widenX = middleX % 4 === 2 ? middleX + 1 : middleX % 4 === 0 && middleX > 0 ? middleX - 1 : middleX; /* inline-math patch 7 */
+  const current = graph.columnWidth.get(widenX) ?? 0;
+  graph.columnWidth.set(widenX, Math.max(current, lenLabel + 2));
   edge.labelLine = [largestLine[0], largestLine[1]];
 }
 function calculateLineWidth(graph, line) {
@@ -1469,7 +1697,7 @@ function analyzeEdgeBundles(graph) {
   const bundledEdges = new Set;
   const edgesByTarget = new Map;
   for (const edge of graph.edges) {
-    if (edge.from === edge.to)
+    if (edge.from === edge.to || isBackEdge(graph, edge))
       continue;
     const existing = edgesByTarget.get(edge.to) ?? [];
     existing.push(edge);
@@ -1500,7 +1728,7 @@ function analyzeEdgeBundles(graph) {
   }
   const edgesBySource = new Map;
   for (const edge of graph.edges) {
-    if (edge.from === edge.to)
+    if (edge.from === edge.to || isBackEdge(graph, edge))
       continue;
     if (bundledEdges.has(edge))
       continue;
@@ -2425,7 +2653,62 @@ function drawLine(canvas, from, to, offsetFrom, offsetTo, useAscii, style = "sol
   }
   return drawnCoords;
 }
+function drawSelfLoop(graph, edge) {
+  const node = edge.from;
+  const none = () => mkCanvas(0, 0);
+  const width = node.drawing.length;
+  const height = node.drawing[0].length;
+  if (width < 5 || height < 5) {
+    layoutReportValue.dropped++;
+    return [none(), none(), none(), none(), none(), none()];
+  }
+  const useAscii = graph.config.useAscii;
+  const chars = LINE_CHARS[edge.style];
+  const hChar = useAscii ? chars.h.ascii : chars.h.unicode;
+  const vChar = useAscii ? chars.v.ascii : chars.v.unicode;
+  const [lineC, boxStartC, arrowC, cornerC, labelC] = [0, 1, 2, 3, 4].map(() => copyCanvas(graph.canvas));
+  const put = (canvas, x, y, c) => {
+    if (canvas[x] && y >= 0 && y < canvas[x].length)
+      canvas[x][y] = c;
+  };
+  const x0 = node.drawingCoord.x;
+  const y0 = node.drawingCoord.y;
+  const lines = splitLines(edge.text);
+  if (edgeLayoutDirection(graph, edge) === "LR") {
+    const bottom = y0 + height - 1;
+    const middle = x0 + Math.floor((width - 1) / 2);
+    put(boxStartC, middle - 1, bottom, useAscii ? " " : "┬");
+    put(lineC, middle - 1, bottom + 1, vChar);
+    put(lineC, middle, bottom + 2, hChar);
+    put(cornerC, middle - 1, bottom + 2, useAscii ? "+" : "└");
+    put(cornerC, middle + 1, bottom + 2, useAscii ? "+" : "┘");
+    put(arrowC, middle + 1, bottom + 1, useAscii ? "^" : "▲");
+    if (edge.text.length > 0) {
+      lines.forEach((text, i) => drawText(labelC, { x: middle - Math.floor(text.length / 2), y: bottom + 3 + i }, text));
+    }
+  } else {
+    const right = x0 + width - 1;
+    const top = y0 + 1;
+    const bottom = y0 + height - 2;
+    put(boxStartC, right, top, useAscii ? " " : "├");
+    put(lineC, right + 1, top, hChar);
+    put(cornerC, right + 2, top, useAscii ? "+" : "┐");
+    for (let y = top + 1;y < bottom; y++) {
+      put(lineC, right + 2, y, vChar);
+    }
+    put(cornerC, right + 2, bottom, useAscii ? "+" : "┘");
+    put(arrowC, right + 1, bottom, useAscii ? "<" : "◄");
+    if (edge.text.length > 0) {
+      const first = y0 + Math.floor(height / 2) - Math.floor((lines.length - 1) / 2);
+      lines.forEach((text, i) => drawText(labelC, { x: right + 4, y: first + i }, text));
+    }
+  }
+  return [lineC, boxStartC, arrowC, none(), cornerC, labelC];
+}
 function drawArrow(graph, edge) {
+  if (edge.isSelfLoop) {
+    return drawSelfLoop(graph, edge);
+  }
   if (edge.path.length === 0) {
     const empty = copyCanvas(graph.canvas);
     return [empty, empty, empty, empty, empty, empty];
@@ -2496,7 +2779,7 @@ function drawPath(graph, path, style = "solid") {
     const dir = determineDirection(previousCoord, nextCoord);
     const segment = drawLine(canvas, prevDC, nextDC, 1, -1, graph.config.useAscii, style);
     if (segment.length === 0)
-      segment.push(prevDC);
+      segment.push(linesDrawn.length === 0 && (prevDC.x === nextDC.x || prevDC.y === nextDC.y) ? { x: prevDC.x + Math.sign(nextDC.x - prevDC.x), y: prevDC.y + Math.sign(nextDC.y - prevDC.y) } : prevDC); /* inline-math patch 8 */
     linesDrawn.push(segment);
     lineDirs.push(dir);
     previousCoord = nextCoord;
@@ -2635,6 +2918,9 @@ function drawArrowLabel(graph, edge) {
     } else if (endY > startY) {
       isUpwardEdge = false;
     }
+  }
+  if (edge.isBack || edge.legLabel) {
+    isUpwardEdge = undefined; /* inline-math patch 6: a loop's label is centred on its leg */
   }
   drawTextOnLine(canvas, drawingLine, edge.text, isUpwardEdge);
   return canvas;
@@ -3308,6 +3594,15 @@ function calculateSubgraphBoundingBox(graph, sg) {
     maxX = Math.max(maxX, nodeMaxX);
     maxY = Math.max(maxY, nodeMaxY);
   }
+  for (const edge of graph.edges) {
+    const bounds = sg.nodes.includes(edge.from) && sg.nodes.includes(edge.to) ? loopBounds(graph, edge) : null;
+    if (bounds) {
+      minX = Math.min(minX, bounds.minX); /* inline-math patch 6: a loop inside a subgraph stays in its box */
+      minY = Math.min(minY, bounds.minY);
+      maxX = Math.max(maxX, bounds.maxX);
+      maxY = Math.max(maxY, bounds.maxY);
+    }
+  }
   const subgraphPadding = 2;
   const subgraphLabelSpace = 2;
   sg.minX = minX - subgraphPadding;
@@ -3469,16 +3764,39 @@ function createMapping(graph) {
   }
   graph.bundles = analyzeEdgeBundles(graph);
   processBundles(graph);
+  const loops = [];
+  graph.loopNodes = new Set;
+  for (const edge of graph.edges) {
+    if (edge.from === edge.to || isBackEdge(graph, edge)) {
+      graph.loopNodes.add(edge.from); /* inline-math patch 6: loops need the side of their nodes */
+      graph.loopNodes.add(edge.to);
+    }
+  }
   for (const edge of graph.edges) {
     if (edge.bundle && edge.path.length > 0) {
       increaseGridSizeForPath(graph, edge.path);
       determineLabelLine(graph, edge);
       continue;
     }
+    if (edge.from === edge.to || isBackEdge(graph, edge)) {
+      loops.push(edge); /* inline-math patch 6: routed after the forward edges */
+      continue;
+    }
     determinePath(graph, edge);
+    if (edge.text.length > 0) {
+      for (const c of edge.path.slice(1, -1)) {
+        if (c.y % 4 === 3) {
+          graph.rowHeight.set(c.y, Math.max(graph.rowHeight.get(c.y) ?? 0, 3)); /* inline-math patch 9 */
+        }
+      }
+    }
     increaseGridSizeForPath(graph, edge.path);
     determineLabelLine(graph, edge);
   }
+  if (loops.length > 0) {
+    routeLoops(graph, loops);
+  }
+  dropOverlaps(graph);
   for (const node of graph.nodes) {
     node.drawingCoord = gridToDrawingCoord(graph, node.gridCoord);
     node.drawing = drawBox(node, graph);
@@ -3486,6 +3804,7 @@ function createMapping(graph) {
   setCanvasSizeToGrid(graph.canvas, graph.columnWidth, graph.rowHeight);
   setRoleCanvasSizeToGrid(graph.roleCanvas, graph.columnWidth, graph.rowHeight);
   calculateSubgraphBoundingBoxes(graph);
+  dropLoopsAcrossSubgraphs(graph); /* inline-math patch 6 */
   offsetDrawingForSubgraphs(graph);
 }
 function getEdgesFromNode(graph, node) {
@@ -5785,6 +6104,7 @@ function detectDiagramType(text) {
   return "flowchart";
 }
 function renderMermaidASCII(text, options = {}) {
+  layoutReportValue = null; /* inline-math patch 6 */
   const config = {
     useAscii: options.useAscii ?? false,
     paddingX: options.paddingX ?? 5,
@@ -5814,6 +6134,7 @@ function renderMermaidASCII(text, options = {}) {
       }
       const graph = convertToAsciiGraph(parsed, config);
       createMapping(graph);
+      layoutReportValue = buildLayoutReport(graph); /* inline-math patch 6 */
       drawGraph(graph);
       if (parsed.direction === "BT") {
         flipCanvasVertically(graph.canvas);
@@ -5828,5 +6149,6 @@ function renderMermaidASCII(text, options = {}) {
   }
 }
 export {
-  renderMermaidASCII
+  renderMermaidASCII,
+  layoutReport
 };

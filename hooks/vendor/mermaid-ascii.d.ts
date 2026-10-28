@@ -22,3 +22,10 @@ export type AsciiRenderOptions = {
 }
 
 export function renderMermaidASCII(text: string, options?: AsciiRenderOptions): string
+
+// What the last renderMermaidASCII call drew of a flowchart or state diagram
+// (null for other diagrams): edges it could not route or draw, the number of
+// distinct arrowheads it drew, and the edge labels it drew.
+export type AsciiLayoutReport = { dropped: number; heads: number; labels: string[] }
+
+export function layoutReport(): AsciiLayoutReport | null
