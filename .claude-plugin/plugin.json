@@ -1,0 +1,58 @@
+{
+  "name": "inline-math",
+  "version": "1.0.0",
+  "description": "Draws the LaTeX in Claude's replies as typeset pictures, inline with the terminal text and on its baseline (kitty graphics: Ghostty, kitty; tmux with passthrough)",
+  "author": { "name": "JC Zhang", "email": "chengrui0727@gmail.com" },
+  "license": "MIT",
+  "keywords": ["latex", "math", "terminal", "kitty-graphics", "tmux"],
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Draw formulas",
+      "description": "Draw LaTeX in replies as pictures. /inline-math on|off overrides this and is kept across sessions.",
+      "default": true
+    },
+    "foreground": {
+      "type": "string",
+      "title": "Formula colour",
+      "description": "\"auto\" follows the desktop's light or dark scheme (Catppuccin Latte / Mocha text), or a colour as #rrggbb.",
+      "default": "auto"
+    },
+    "cell": {
+      "type": "string",
+      "title": "Cell size in pixels",
+      "description": "\"auto\" asks tmux or the terminal; else WIDTHxHEIGHT of one character cell, such as 19x42.",
+      "default": "auto"
+    },
+    "baseline": {
+      "type": "number",
+      "title": "Text baseline",
+      "description": "Where the font's baseline sits in a cell, from the top, as a fraction of the cell height (JetBrains Mono: 0.773).",
+      "default": 0.773,
+      "min": 0.3,
+      "max": 0.95
+    },
+    "ptPx": {
+      "type": "number",
+      "title": "Formula scale",
+      "description": "Pixels per TeX point. Larger draws bigger formulas; 3.4 matches a 12 pt terminal font at 42 px cells.",
+      "default": 3.4,
+      "min": 1,
+      "max": 12
+    },
+    "minShrink": {
+      "type": "number",
+      "title": "Smallest inline scale",
+      "description": "How far an inline formula may shrink to stay on one text row before it takes more rows (0.8 = 80%).",
+      "default": 0.8,
+      "min": 0.3,
+      "max": 1
+    },
+    "promptHint": {
+      "type": "boolean",
+      "title": "Tell Claude about it",
+      "description": "Add a short note to the system prompt: write math as $...$ and $$...$$, never in code blocks.",
+      "default": true
+    }
+  }
+}
